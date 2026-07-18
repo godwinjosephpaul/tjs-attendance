@@ -590,6 +590,7 @@ function renderStudents(c){
         <input type="text" id="stuSearch" placeholder="Search by name or register number...">
         <select id="stuDeptFilter"><option value="">All Departments</option>${deptOptionsHTML()}</select>
         <button class="btn blue" onclick="openStudentModal()">+ Add Student</button>
+        <button class="btn outline" onclick="openBulkUploadModal()">⬆ Bulk Upload (CSV)</button>
       </div>
       <table>
         <thead><tr><th>Reg No</th><th>Name</th><th>Department</th><th>Year</th><th>Section</th><th>DOB</th><th>Mobile</th><th>Action</th></tr></thead>
@@ -669,6 +670,102 @@ function deleteStudent(reg){
 }
 
 /* ============================================================
+   BULK STUDENT UPLOAD (admin) — CSV import
+   Expected columns: reg,name,dept,year,section,mobile,dob
+   dob format: YYYY-MM-DD (also used as the student's login password)
+   ============================================================ */
+function downloadStudentCSVTemplate(){
+  const csv = 'reg,name,dept,year,section,mobile,dob\n22CS999,Sample Student,CSE,III,A,9876543210,2004-01-01';
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'students_template.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+function openBulkUploadModal(){
+  const bg = document.createElement('div');
+  bg.className='modal-bg';
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>Bulk Upload Students</h3>
+      <p style="color:var(--muted);font-size:14px;margin:0 0 12px;">
+        Upload a CSV file with columns: <b>reg, name, dept, year, section, mobile, dob</b><br>
+        dob must be in YYYY-MM-DD format (this becomes the student's login password).
+        Existing register numbers will be updated; new ones will be added.
+      </p>
+      <button class="btn outline" style="margin-bottom:14px;" onclick="downloadStudentCSVTemplate()">⬇ Download CSV Template</button>
+      <div class="field"><input type="file" id="bulkCSVFile" accept=".csv"></div>
+      <div id="bulkUploadMsg" style="color:var(--red);font-size:14px;margin-top:6px;"></div>
+      <div class="modal-actions">
+        <button class="btn gray" onclick="this.closest('.modal-bg').remove()">Cancel</button>
+        <button class="btn blue" onclick="processBulkUpload()">Upload</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+}
+function parseCSVLine(line){
+  // simple CSV split that also handles quoted fields containing commas
+  const result = [];
+  let cur = '', inQuotes = false;
+  for(let i=0;i<line.length;i++){
+    const ch = line[i];
+    if(ch==='"'){ inQuotes = !inQuotes; }
+    else if(ch===',' && !inQuotes){ result.push(cur.trim()); cur=''; }
+    else { cur += ch; }
+  }
+  result.push(cur.trim());
+  return result;
+}
+function processBulkUpload(){
+  const fileInput = document.getElementById('bulkCSVFile');
+  const msg = document.getElementById('bulkUploadMsg');
+  const file = fileInput.files[0];
+  if(!file){ msg.textContent = 'Please choose a CSV file first.'; return; }
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    try{
+      const text = e.target.result;
+      const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
+      if(lines.length < 2){ msg.textContent = 'CSV file appears to be empty.'; return; }
+      const header = parseCSVLine(lines[0]).map(h=>h.toLowerCase());
+      const required = ['reg','name','dept','year','section','mobile','dob'];
+      const missing = required.filter(r=>!header.includes(r));
+      if(missing.length){ msg.textContent = 'Missing required column(s): ' + missing.join(', '); return; }
+      const idx = {};
+      required.forEach(r=> idx[r] = header.indexOf(r));
+
+      let students = getStudents();
+      let added = 0, updated = 0, skipped = 0;
+      for(let i=1;i<lines.length;i++){
+        const cols = parseCSVLine(lines[i]);
+        const reg = (cols[idx.reg]||'').trim();
+        const name = (cols[idx.name]||'').trim();
+        if(!reg || !name){ skipped++; continue; }
+        const rec = {
+          reg,
+          name,
+          dept: (cols[idx.dept]||'').trim(),
+          year: (cols[idx.year]||'').trim(),
+          section: (cols[idx.section]||'').trim(),
+          mobile: (cols[idx.mobile]||'').trim(),
+          dob: (cols[idx.dob]||'').trim()
+        };
+        const existingIdx = students.findIndex(s=>s.reg===reg);
+        if(existingIdx>=0){ students[existingIdx] = rec; updated++; }
+        else { students.push(rec); added++; }
+      }
+      setStudents(students);
+      document.querySelector('.modal-bg').remove();
+      renderPage();
+      alert(`Bulk upload complete.\nAdded: ${added}\nUpdated: ${updated}\nSkipped (missing reg/name): ${skipped}`);
+    } catch(err){
+      msg.textContent = 'Could not read this file. Make sure it is a valid CSV.';
+    }
+  };
+  reader.readAsText(file);
+}
+
+/* ============================================================
    STAFF MANAGEMENT (admin) — each staff belongs to one department
    ============================================================ */
 function renderStaff(c){
@@ -679,6 +776,7 @@ function renderStaff(c){
         <input type="text" id="stfSearch" placeholder="Search by name or staff ID...">
         <select id="stfDeptFilter"><option value="">All Departments</option>${deptOptionsHTML()}</select>
         <button class="btn blue" onclick="openStaffModal()">+ Add Staff</button>
+        <button class="btn outline" onclick="openBulkStaffUploadModal()">⬆ Bulk Upload (CSV)</button>
       </div>
       <table>
         <thead><tr><th>Staff ID</th><th>Name</th><th>Department</th><th>Subject</th><th>Mobile</th><th>Action</th></tr></thead>
@@ -757,6 +855,95 @@ function deleteStaff(id){
   if(!confirm('Remove this staff member?')) return;
   setStaff(getStaff().filter(s=>s.id!==id));
   renderPage();
+}
+
+/* ============================================================
+   BULK STAFF UPLOAD (admin) — CSV import
+   Expected columns: id,name,dept,subject,mobile,password
+   Staff log in with their NAME + password. "id" is just an
+   internal unique reference (like an employee code).
+   ============================================================ */
+function downloadStaffCSVTemplate(){
+  const csv = 'id,name,dept,subject,mobile,password\nstaff001,Prof. Sample Name,CSE,DBMS,9876543210,changeme123';
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'staff_template.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+function openBulkStaffUploadModal(){
+  const bg = document.createElement('div');
+  bg.className='modal-bg';
+  bg.innerHTML = `
+    <div class="modal">
+      <h3>Bulk Upload Staff</h3>
+      <p style="color:var(--muted);font-size:14px;margin:0 0 12px;">
+        Upload a CSV file with columns: <b>id, name, dept, subject, mobile, password</b><br>
+        Staff log in using their <b>name</b> and <b>password</b> — "id" is just an internal reference and must be unique per staff member.
+        Existing ids will be updated (password only changes if a new one is given); new ids will be added.
+      </p>
+      <button class="btn outline" style="margin-bottom:14px;" onclick="downloadStaffCSVTemplate()">⬇ Download CSV Template</button>
+      <div class="field"><input type="file" id="bulkStaffCSVFile" accept=".csv"></div>
+      <div id="bulkStaffUploadMsg" style="color:var(--red);font-size:14px;margin-top:6px;"></div>
+      <div class="modal-actions">
+        <button class="btn gray" onclick="this.closest('.modal-bg').remove()">Cancel</button>
+        <button class="btn blue" onclick="processBulkStaffUpload()">Upload</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+}
+function processBulkStaffUpload(){
+  const fileInput = document.getElementById('bulkStaffCSVFile');
+  const msg = document.getElementById('bulkStaffUploadMsg');
+  const file = fileInput.files[0];
+  if(!file){ msg.textContent = 'Please choose a CSV file first.'; return; }
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    try{
+      const text = e.target.result;
+      const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
+      if(lines.length < 2){ msg.textContent = 'CSV file appears to be empty.'; return; }
+      const header = parseCSVLine(lines[0]).map(h=>h.toLowerCase());
+      const required = ['id','name','dept','subject','mobile','password'];
+      const missing = required.filter(r=>!header.includes(r));
+      if(missing.length){ msg.textContent = 'Missing required column(s): ' + missing.join(', '); return; }
+      const idx = {};
+      required.forEach(r=> idx[r] = header.indexOf(r));
+
+      let staffList = getStaff();
+      let added = 0, updated = 0, skipped = 0;
+      for(let i=1;i<lines.length;i++){
+        const cols = parseCSVLine(lines[i]);
+        const id = (cols[idx.id]||'').trim();
+        const name = (cols[idx.name]||'').trim();
+        if(!id || !name){ skipped++; continue; }
+        const dept = (cols[idx.dept]||'').trim();
+        const subject = (cols[idx.subject]||'').trim();
+        const mobile = (cols[idx.mobile]||'').trim();
+        const password = (cols[idx.password]||'').trim();
+        const existingIdx = staffList.findIndex(s=>s.id===id);
+        if(existingIdx>=0){
+          const prev = staffList[existingIdx];
+          staffList[existingIdx] = {id,name,dept,subject,mobile,password: password? password : prev.password};
+          updated++;
+        } else {
+          if(!password){ skipped++; continue; }
+          staffList.push({id,name,dept,subject,mobile,password});
+          added++;
+        }
+      }
+      const dupNames = staffList.map(s=>s.name.toLowerCase()).filter((n,i,arr)=>arr.indexOf(n)!==i);
+      setStaff(staffList);
+      document.querySelector('.modal-bg').remove();
+      renderPage();
+      let summary = `Bulk upload complete.\nAdded: ${added}\nUpdated: ${updated}\nSkipped (missing id/name, or new staff with no password): ${skipped}`;
+      if(dupNames.length){ summary += `\n\nWarning: duplicate staff name(s) found (${[...new Set(dupNames)].join(', ')}) — since staff log in by name, only one of them will be reachable. Consider renaming.`; }
+      alert(summary);
+    } catch(err){
+      msg.textContent = 'Could not read this file. Make sure it is a valid CSV.';
+    }
+  };
+  reader.readAsText(file);
 }
 
 /* ============================================================
