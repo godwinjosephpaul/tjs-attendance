@@ -301,6 +301,26 @@ async function saveState(){
     updated_at: new Date().toISOString()
   }).eq('id',1);
   if(error) console.error('Supabase save failed:', error);
+  return !error;
+}
+
+async function saveAttendancePeriod(date, period, edits){
+  // edits = { regNo: status, ... } for just the students being saved right now.
+  const { data, error: fetchErr } = await sb.from('ams_state').select('attendance').eq('id',1).maybeSingle();
+  if(fetchErr){ console.error('Could not refresh attendance before saving:', fetchErr); return false; }
+  const latestAttendance = (data && data.attendance) ? data.attendance : {};
+  const dayRecord = Object.assign({}, latestAttendance[date] || {});
+  const periodRecord = Object.assign({}, dayRecord[period] || {});
+  Object.keys(edits).forEach(reg=>{ periodRecord[reg] = edits[reg]; });
+  dayRecord[period] = periodRecord;
+  latestAttendance[date] = dayRecord;
+  const { error: saveErr } = await sb.from('ams_state').update({
+    attendance: latestAttendance,
+    updated_at: new Date().toISOString()
+  }).eq('id',1);
+  if(saveErr){ console.error('Supabase save failed:', saveErr); return false; }
+  _state.attendance = latestAttendance;
+  return true;
 }
 
 function getAdmin(){ return _state.admin; }
@@ -969,7 +989,7 @@ function renderAttendance(c){
         </div>
         <div style="flex:1;"></div>
         <button class="btn outline" onclick="markAll('present')">Mark All Present</button>
-        <button class="btn green" onclick="saveAttendanceRecords()">Save Attendance</button>
+        <button class="btn green" id="attSaveBtn" onclick="saveAttendanceRecords()">Save Attendance</button>
       </div>
       <div id="attPeriodSummary" style="padding:0 2px 14px;font-size:12.5px;color:var(--muted);"></div>
       <table>
@@ -1014,23 +1034,29 @@ function markAll(status){
     radios.forEach(r=>{ r.checked = (r.value===status); });
   });
 }
-function saveAttendanceRecords(){
+async function saveAttendanceRecords(){
   const date = document.getElementById('attDate').value;
   const period = document.getElementById('attPeriod').value;
   const deptSel = document.getElementById('attDept').value;
   let students = getStudents();
   if(deptSel) students = students.filter(s=>s.dept===deptSel);
-  const att = getAttendance();
-  const dayRecord = att[date] || {};
-  const periodRecord = dayRecord[period] || {};
+
+  const edits = {};
   students.forEach(s=>{
     const checked = document.querySelector(`input[name="att_${s.reg}"]:checked`);
-    periodRecord[s.reg] = checked ? checked.value : 'present';
+    edits[s.reg] = checked ? checked.value : 'present';
   });
-  dayRecord[period] = periodRecord;
-  att[date] = dayRecord;
-  setAttendance(att);
-  alert('Attendance saved for '+date+' — Period '+period+(deptSel?' — '+deptLabel(deptSel):''));
+
+  const btn = document.getElementById('attSaveBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  const ok = await saveAttendancePeriod(date, period, edits);
+  if(btn){ btn.disabled = false; btn.textContent = 'Save Attendance'; }
+
+  if(ok){
+    alert('Attendance saved for '+date+' — Period '+period+(deptSel?' — '+deptLabel(deptSel):''));
+  } else {
+    alert('Could not save attendance — check your connection and try again. Nothing was overwritten.');
+  }
   drawAttendanceTable();
 }
 
