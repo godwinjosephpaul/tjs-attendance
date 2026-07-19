@@ -124,6 +124,11 @@
   .pill.present{background:var(--green-bg);color:var(--green);}
   .pill.absent{background:var(--red-bg);color:var(--red);}
   .pill.od{background:var(--blue-bg);color:var(--blue);}
+  .status-btn{border:none;cursor:pointer;padding:4px 11px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;font-family:inherit;}
+  .status-btn.present{background:var(--green-bg);color:var(--green);}
+  .status-btn.absent{background:var(--red-bg);color:var(--red);}
+  .status-btn.od{background:var(--blue-bg);color:var(--blue);}
+  .status-btn:hover{filter:brightness(0.95);}
 
   .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
   .toolbar input,.toolbar select{padding:9px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:13px;background:#fff;}
@@ -239,6 +244,18 @@ function deptFullName(code){
   const d = DEPARTMENTS.find(d=>d.code===code);
   return d ? d.name : (code||'—');
 }
+
+/* ============================================================
+   ATTENDANCE CELL VALUES
+   Normally a cell is just the string 'present' | 'absent' | 'od'.
+   When a student is marked OD, staff can attach a short comment
+   (reason for being on duty), in which case the cell is stored as
+   { status:'od', comment:'...' } instead of a plain string.
+   These two helpers let the rest of the app read either shape
+   without caring which one it is.
+   ============================================================ */
+function cellStatus(val){ return val && typeof val === 'object' ? val.status : (val || null); }
+function cellComment(val){ return val && typeof val === 'object' ? (val.comment || '') : ''; }
 
 /* ============================================================
    PERIODS — 7 periods per day. Attendance is taken per period,
@@ -515,9 +532,10 @@ function studentStats(reg){
       const periodRecord = dayRecord[p];
       if(periodRecord && periodRecord[reg]){
         total++;
-        if(periodRecord[reg]==='present') present++;
-        else if(periodRecord[reg]==='absent') absent++;
-        else if(periodRecord[reg]==='od') od++;
+        const st = cellStatus(periodRecord[reg]);
+        if(st==='present') present++;
+        else if(st==='absent') absent++;
+        else if(st==='od') od++;
       }
     });
   });
@@ -535,7 +553,7 @@ function overallStats(deptFilter){
   const periodsMarked = PERIODS.filter(p=>todayRecord[p] && Object.keys(todayRecord[p]).length);
   periodsMarked.forEach(p=>{
     students.forEach(s=>{
-      const st = todayRecord[p][s.reg];
+      const st = cellStatus(todayRecord[p][s.reg]);
       if(st==='present') presentToday++;
       else if(st==='absent') absentToday++;
       else if(st==='od') odToday++;
@@ -968,6 +986,9 @@ function processBulkStaffUpload(){
 
 /* ============================================================
    TAKE ATTENDANCE (admin + staff) — filtered by department
+   Grid view: every period (1–7) is a column, so staff can mark
+   who's absent/OD across the whole day in one screen instead of
+   switching a Period dropdown 7 times.
    ============================================================ */
 function renderAttendance(c){
   const dateVal = todayStr();
@@ -977,10 +998,6 @@ function renderAttendance(c){
     <div class="card">
       <div class="toolbar">
         <div class="field" style="margin:0;"><label>Date</label><input type="date" id="attDate" value="${dateVal}"></div>
-        <div class="field" style="margin:0;min-width:160px;">
-          <label>Period</label>
-          <select id="attPeriod">${PERIODS.map(p=>`<option value="${p}">Period ${p}</option>`).join('')}</select>
-        </div>
         <div class="field" style="margin:0;min-width:260px;">
           <label>Department</label>
           ${isAdmin
@@ -988,74 +1005,119 @@ function renderAttendance(c){
             : `<select id="attDept" disabled><option value="${lockedDept}" selected>${deptFullName(lockedDept)}</option></select>`}
         </div>
         <div style="flex:1;"></div>
-        <button class="btn outline" onclick="markAll('present')">Mark All Present</button>
-        <button class="btn green" id="attSaveBtn" onclick="saveAttendanceRecords()">Save Attendance</button>
+        <button class="btn outline" onclick="markAllPresentGrid()">Mark All Present</button>
+        <button class="btn green" id="attSaveBtn" onclick="saveAllPeriods()">Save All Periods</button>
       </div>
-      <div id="attPeriodSummary" style="padding:0 2px 14px;font-size:12.5px;color:var(--muted);"></div>
+      <div id="attPeriodSummary" style="padding:0 2px 6px;font-size:12.5px;color:var(--muted);"></div>
+      <div style="padding:0 2px 14px;font-size:12px;color:var(--muted);">
+        Click a period cell to cycle its status: <span class="pill present">PRESENT</span> → <span class="pill absent">ABSENT</span> → <span class="pill od">OD</span>. Marking OD will ask for a short reason/comment (optional). Unmarked students default to Present.
+        Use the small <b>Save</b> link under a period's name to save just that one period, or <b>Save All Periods</b> to save every column at once.
+      </div>
+      <div style="overflow-x:auto;">
       <table>
-        <thead><tr><th>Reg No</th><th>Student Name</th><th>Department</th><th>Status</th></tr></thead>
+        <thead><tr><th>Reg No</th><th>Student Name</th><th>Department</th>${PERIODS.map(p=>`<th>Period ${p}<br><a href="#" style="font-size:10.5px;font-weight:600;" onclick="event.preventDefault();saveOnePeriodFromGrid(${p});">Save</a></th>`).join('')}</tr></thead>
         <tbody id="attTbody"></tbody>
       </table>
+      </div>
     </div>`;
   document.getElementById('attDate').addEventListener('change', drawAttendanceTable);
-  document.getElementById('attPeriod').addEventListener('change', drawAttendanceTable);
   if(isAdmin) document.getElementById('attDept').addEventListener('change', drawAttendanceTable);
   drawAttendanceTable();
 }
+function statusLabel(status){ return status==='absent' ? 'ABSENT' : status==='od' ? 'OD' : 'PRESENT'; }
+function nextStatus(status){ return status==='present' ? 'absent' : status==='od' ? 'present' : 'od'; }
+function odButtonLabel(comment){ return 'OD'+(comment?' 💬':''); }
 function drawAttendanceTable(){
   const date = document.getElementById('attDate').value;
-  const period = document.getElementById('attPeriod').value;
   const deptSel = document.getElementById('attDept').value;
   let students = getStudents();
   if(deptSel) students = students.filter(s=>s.dept===deptSel);
   const att = getAttendance();
   const dayRecord = att[date] || {};
-  const periodRecord = dayRecord[period] || {};
   const tb = document.getElementById('attTbody');
-  tb.innerHTML = students.length? '' : `<tr><td colspan="4" class="empty">No students found for this department.</td></tr>`;
+  tb.innerHTML = students.length? '' : `<tr><td colspan="${PERIODS.length+3}" class="empty">No students found for this department.</td></tr>`;
   students.forEach(s=>{
-    const status = periodRecord[s.reg] || 'present';
+    const cells = PERIODS.map(p=>{
+      const periodRecord = dayRecord[p] || {};
+      const rawVal = periodRecord[s.reg];
+      const status = cellStatus(rawVal) || 'present';
+      const comment = cellComment(rawVal);
+      const label = status==='od' ? odButtonLabel(comment) : statusLabel(status);
+      const title = comment ? ` title="${comment.replace(/"/g,'&quot;')}"` : '';
+      return `<td><button type="button" class="status-btn ${status}" data-reg="${s.reg}" data-period="${p}" data-status="${status}" data-comment="${comment.replace(/"/g,'&quot;')}"${title} onclick="cycleStatus(this)">${label}</button></td>`;
+    }).join('');
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${s.reg}</td><td>${s.name}</td><td><span class="badge-dept">${deptLabel(s.dept)}</span></td>
-      <td><div class="attn-radio">
-        <label><input type="radio" name="att_${s.reg}" value="present" ${status==='present'?'checked':''}> Present</label>
-        <label><input type="radio" name="att_${s.reg}" value="absent" ${status==='absent'?'checked':''}> Absent</label>
-        <label><input type="radio" name="att_${s.reg}" value="od" ${status==='od'?'checked':''}> OD</label>
-      </div></td>`;
+    tr.innerHTML = `<td>${s.reg}</td><td>${s.name}</td><td><span class="badge-dept">${deptLabel(s.dept)}</span></td>${cells}`;
     tb.appendChild(tr);
   });
   const markedPeriods = PERIODS.filter(p=>dayRecord[p] && Object.keys(dayRecord[p]).length);
   document.getElementById('attPeriodSummary').textContent =
     `${markedPeriods.length} of 7 periods already have attendance saved for ${date}${markedPeriods.length? ' (Period '+markedPeriods.join(', ')+')':''}.`;
 }
-function markAll(status){
-  document.querySelectorAll('#attTbody tr').forEach(tr=>{
-    const radios = tr.querySelectorAll('input[type=radio]');
-    radios.forEach(r=>{ r.checked = (r.value===status); });
+function applyStatusToButton(btn, status, comment){
+  btn.dataset.status = status;
+  btn.dataset.comment = comment || '';
+  btn.className = 'status-btn '+status;
+  btn.textContent = status==='od' ? odButtonLabel(comment) : statusLabel(status);
+  if(comment){ btn.title = comment; } else { btn.removeAttribute('title'); }
+}
+function cycleStatus(btn){
+  const next = nextStatus(btn.dataset.status);
+  if(next==='od'){
+    const comment = window.prompt('Reason for On Duty (optional):', btn.dataset.comment || '');
+    if(comment===null) return; // staff cancelled — leave status unchanged
+    applyStatusToButton(btn, 'od', comment.trim());
+  } else {
+    applyStatusToButton(btn, next, '');
+  }
+}
+function markAllPresentGrid(){
+  document.querySelectorAll('#attTbody .status-btn').forEach(btn=>{
+    applyStatusToButton(btn, 'present', '');
   });
 }
-async function saveAttendanceRecords(){
-  const date = document.getElementById('attDate').value;
-  const period = document.getElementById('attPeriod').value;
-  const deptSel = document.getElementById('attDept').value;
-  let students = getStudents();
-  if(deptSel) students = students.filter(s=>s.dept===deptSel);
-
+function collectEditsForPeriod(period){
   const edits = {};
-  students.forEach(s=>{
-    const checked = document.querySelector(`input[name="att_${s.reg}"]:checked`);
-    edits[s.reg] = checked ? checked.value : 'present';
+  document.querySelectorAll(`#attTbody .status-btn[data-period="${period}"]`).forEach(btn=>{
+    const status = btn.dataset.status;
+    const comment = btn.dataset.comment;
+    edits[btn.dataset.reg] = (status==='od' && comment) ? {status:'od', comment} : status;
   });
-
+  return edits;
+}
+async function saveOnePeriodFromGrid(period){
+  const date = document.getElementById('attDate').value;
+  const deptSel = document.getElementById('attDept').value;
+  const edits = collectEditsForPeriod(period);
   const btn = document.getElementById('attSaveBtn');
-  if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
-  const ok = await saveAttendancePeriod(date, period, edits);
-  if(btn){ btn.disabled = false; btn.textContent = 'Save Attendance'; }
-
+  if(btn){ btn.disabled = true; }
+  const ok = await saveAttendancePeriod(date, String(period), edits);
+  if(btn){ btn.disabled = false; }
   if(ok){
     alert('Attendance saved for '+date+' — Period '+period+(deptSel?' — '+deptLabel(deptSel):''));
   } else {
-    alert('Could not save attendance — check your connection and try again. Nothing was overwritten.');
+    alert('Could not save Period '+period+' — check your connection and try again. Nothing was overwritten.');
+  }
+  drawAttendanceTable();
+}
+async function saveAllPeriods(){
+  const date = document.getElementById('attDate').value;
+  const deptSel = document.getElementById('attDept').value;
+  const btn = document.getElementById('attSaveBtn');
+  if(btn){ btn.disabled = true; }
+  let allOk = true;
+  for(let i=0;i<PERIODS.length;i++){
+    const p = PERIODS[i];
+    if(btn){ btn.textContent = `Saving period ${p} of ${PERIODS.length}…`; }
+    const edits = collectEditsForPeriod(p);
+    const ok = await saveAttendancePeriod(date, String(p), edits);
+    if(!ok) allOk = false;
+  }
+  if(btn){ btn.disabled = false; btn.textContent = 'Save All Periods'; }
+  if(allOk){
+    alert('Attendance saved for all 7 periods on '+date+(deptSel?' — '+deptLabel(deptSel):''));
+  } else {
+    alert('Some periods could not be saved — check your connection and try again. Any period that did save was not overwritten by the others.');
   }
   drawAttendanceTable();
 }
@@ -1128,7 +1190,13 @@ function drawPeriodWiseTable(){
   if(deptSel) students = students.filter(s=>s.dept===deptSel);
   const att = getAttendance();
   const dayRecord = att[date] || {};
-  const pillFor = status => status ? `<span class="pill ${status}">${status.toUpperCase()}</span>` : `<span style="color:var(--muted);">—</span>`;
+  const pillFor = val => {
+    const status = cellStatus(val);
+    if(!status) return `<span style="color:var(--muted);">—</span>`;
+    const comment = cellComment(val);
+    const title = comment ? ` title="${comment.replace(/"/g,'&quot;')}"` : '';
+    return `<span class="pill ${status}"${title}>${status.toUpperCase()}${comment?' 💬':''}</span>`;
+  };
   const tb = document.getElementById('pwTbody');
   tb.innerHTML = students.length? '' : `<tr><td colspan="${PERIODS.length+1}" class="empty">No students found for this department.</td></tr>`;
   students.forEach(s=>{
@@ -1157,7 +1225,7 @@ function drawDeptOverview(){
     periodsToCount.forEach(p=>{
       const periodRecord = dayRecord[p] || {};
       deptStudents.forEach(s=>{
-        const st = periodRecord[s.reg];
+        const st = cellStatus(periodRecord[s.reg]);
         if(st==='present') present++;
         else if(st==='absent') absent++;
         else if(st==='od') od++;
@@ -1223,7 +1291,13 @@ function renderMyAttendance(c){
   const dates = Object.keys(att).sort().reverse()
     .filter(date => PERIODS.some(p => att[date][p] && att[date][p][reg]));
   const s = studentStats(reg);
-  const pillFor = status => status ? `<span class="pill ${status}">${status.toUpperCase()}</span>` : `<span style="color:var(--muted);">—</span>`;
+  const pillFor = val => {
+    const status = cellStatus(val);
+    if(!status) return `<span style="color:var(--muted);">—</span>`;
+    const comment = cellComment(val);
+    const title = comment ? ` title="${comment.replace(/"/g,'&quot;')}"` : '';
+    return `<span class="pill ${status}"${title}>${status.toUpperCase()}${comment?' 💬':''}</span>`;
+  };
   c.innerHTML = `
     <div class="grid grid-4" style="margin-bottom:18px;">
       <div class="card stat-card"><div class="label">Overall Attendance</div><div class="val">${s.pct}%</div></div>
