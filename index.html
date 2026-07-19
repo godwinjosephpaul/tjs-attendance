@@ -135,6 +135,8 @@
   .status-select.od{background-color:var(--blue-bg);color:var(--blue);background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%232B63C9" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');}
   .status-select:hover{filter:brightness(0.95);}
   .status-select:focus{border-color:currentColor;}
+  .status-select:disabled{cursor:default;opacity:0.55;filter:grayscale(0.4);}
+  .status-select:disabled:hover{filter:grayscale(0.4);}
 
   .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
   .toolbar input,.toolbar select{padding:9px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:13px;background:#fff;}
@@ -326,6 +328,14 @@ async function saveState(){
   if(error) console.error('Supabase save failed:', error);
   return !error;
 }
+async function refreshStaffFromServer(){
+  // Picks up admin changes (like period assignments) made after this session started,
+  // without requiring the staff member to log out and back in.
+  try{
+    const { data, error } = await sb.from('ams_state').select('staff').eq('id',1).maybeSingle();
+    if(!error && data && data.staff){ _state.staff = data.staff; }
+  }catch(e){ console.error('Could not refresh staff list:', e); }
+}
 
 async function saveAttendancePeriod(date, period, edits){
   // edits = { regNo: status, ... } for just the students being saved right now.
@@ -420,10 +430,15 @@ function applyLoginFieldsForRole(){
   }
 }
 
-function doLogin(){
+async function doLogin(){
   const u = document.getElementById('loginUser').value.trim();
   const p = document.getElementById('loginPass').value.trim();
   let ok = false;
+
+  const loginBtn = document.querySelector('#loginScreen .btn-primary');
+  if(loginBtn){ loginBtn.disabled = true; loginBtn.textContent = 'Checking…'; }
+  try{ await loadState(); }catch(e){ console.error('Could not refresh data before login:', e); }
+  if(loginBtn){ loginBtn.disabled = false; loginBtn.textContent = 'Login'; }
 
   if(currentRole==='student'){
     const uLower = u.toLowerCase();
@@ -862,6 +877,15 @@ function openStaffModal(id){
       <div class="field"><label>Subject Handling</label><input id="fSubject" value="${editing?editing.subject||'':''}" placeholder="e.g. DBMS"></div>
       <div class="field"><label>Mobile</label><input id="fMobile" value="${editing?editing.mobile||'':''}"></div>
       <div class="field">
+        <label>Periods Responsible For (leave all unchecked = full access to all periods)</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;padding:6px 0;">
+          ${PERIODS.map(p=>{
+            const assigned = editing && Array.isArray(editing.periods) && editing.periods.includes(p);
+            return `<label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:13px;"><input type="checkbox" class="fPeriodChk" value="${p}" ${assigned?'checked':''}> P${p}</label>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="field">
         <label>${editing?'Reset Password (leave blank to keep current)':'Set Login Password'}</label>
         <input type="text" id="fPassword" placeholder="${editing?'Leave blank to keep unchanged':'e.g. a password you choose'}">
       </div>
@@ -879,17 +903,18 @@ function saveStaff(editingId){
   const subject = document.getElementById('fSubject').value.trim();
   const mobile = document.getElementById('fMobile').value.trim();
   const newPassword = document.getElementById('fPassword').value.trim();
+  const periods = Array.from(document.querySelectorAll('.fPeriodChk:checked')).map(el=>Number(el.value));
   if(!id || !name){ alert('Staff ID and name are required'); return; }
   let staffList = getStaff();
   if(editingId){
     staffList = staffList.map(s=>{
       if(s.id!==editingId) return s;
-      return {id,name,dept,subject,mobile,password:newPassword? newPassword : s.password};
+      return {id,name,dept,subject,mobile,periods,password:newPassword? newPassword : s.password};
     });
   } else {
     if(staffList.some(s=>s.id===id)){ alert('A staff member with this ID already exists'); return; }
     if(!newPassword){ alert('Please set a login password for this staff member'); return; }
-    staffList.push({id,name,dept,subject,mobile,password:newPassword});
+    staffList.push({id,name,dept,subject,mobile,periods,password:newPassword});
   }
   setStaff(staffList);
   document.querySelector('.modal-bg').remove();
@@ -908,7 +933,7 @@ function deleteStaff(id){
    internal unique reference (like an employee code).
    ============================================================ */
 function downloadStaffCSVTemplate(){
-  const csv = 'id,name,dept,subject,mobile,password\nstaff001,Prof. Sample Name,CSE,DBMS,9876543210,changeme123';
+  const csv = 'id,name,dept,subject,mobile,password,periods\nstaff001,Prof. Sample Name,CSE,DBMS,9876543210,changeme123,"1,2,3"';
   const blob = new Blob([csv], {type:'text/csv'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -922,7 +947,7 @@ function openBulkStaffUploadModal(){
     <div class="modal">
       <h3>Bulk Upload Staff</h3>
       <p style="color:var(--muted);font-size:14px;margin:0 0 12px;">
-        Upload a CSV file with columns: <b>id, name, dept, subject, mobile, password</b><br>
+        Upload a CSV file with columns: <b>id, name, dept, subject, mobile, password</b>, plus an optional <b>periods</b> column (e.g. "1,3,5" — the periods that staff member can take attendance for; leave blank for full access to all periods).<br>
         Staff log in using their <b>name</b> and <b>password</b> — "id" is just an internal reference and must be unique per staff member.
         Existing ids will be updated (password only changes if a new one is given); new ids will be added.
       </p>
@@ -953,6 +978,7 @@ function processBulkStaffUpload(){
       if(missing.length){ msg.textContent = 'Missing required column(s): ' + missing.join(', '); return; }
       const idx = {};
       required.forEach(r=> idx[r] = header.indexOf(r));
+      idx.periods = header.indexOf('periods');
 
       let staffList = getStaff();
       let added = 0, updated = 0, skipped = 0;
@@ -965,14 +991,16 @@ function processBulkStaffUpload(){
         const subject = (cols[idx.subject]||'').trim();
         const mobile = (cols[idx.mobile]||'').trim();
         const password = (cols[idx.password]||'').trim();
+        const periodsRaw = idx.periods>=0 ? (cols[idx.periods]||'').trim() : '';
+        const periods = periodsRaw ? periodsRaw.split(/[|,]/).map(x=>Number(x.trim())).filter(n=>PERIODS.includes(n)) : [];
         const existingIdx = staffList.findIndex(s=>s.id===id);
         if(existingIdx>=0){
           const prev = staffList[existingIdx];
-          staffList[existingIdx] = {id,name,dept,subject,mobile,password: password? password : prev.password};
+          staffList[existingIdx] = {id,name,dept,subject,mobile,periods: periodsRaw? periods : (prev.periods||[]),password: password? password : prev.password};
           updated++;
         } else {
           if(!password){ skipped++; continue; }
-          staffList.push({id,name,dept,subject,mobile,password});
+          staffList.push({id,name,dept,subject,mobile,periods,password});
           added++;
         }
       }
@@ -996,7 +1024,8 @@ function processBulkStaffUpload(){
    who's absent/OD across the whole day in one screen instead of
    switching a Period dropdown 7 times.
    ============================================================ */
-function renderAttendance(c){
+async function renderAttendance(c){
+  if(currentRole==='staff'){ await refreshStaffFromServer(); }
   const dateVal = todayStr();
   const isAdmin = currentRole==='admin';
   const lockedDept = isAdmin ? '' : currentUser.dept;
@@ -1015,24 +1044,42 @@ function renderAttendance(c){
         <button class="btn green" id="attSaveBtn" onclick="saveAllPeriods()">Save All Periods</button>
       </div>
       <div id="attPeriodSummary" style="padding:0 2px 6px;font-size:12.5px;color:var(--muted);"></div>
+      <div id="attAccessNote" style="padding:0 2px 6px;font-size:12.5px;color:var(--blue);font-weight:600;"></div>
       <div style="padding:0 2px 14px;font-size:12px;color:var(--muted);">
         Use the dropdown in a period cell to set status: <span class="pill present">PRESENT</span>, <span class="pill absent">ABSENT</span>, or <span class="pill od">OD</span>. Choosing OD will ask for a short reason/comment (optional). Unmarked students default to Present.
-        Use the small <b>Save</b> link under a period's name to save just that one period, or <b>Save All Periods</b> to save every column at once.
+        Use the small <b>Save</b> link under a period's name to save just that one period, or <b>Save All Periods</b> to save every period you have access to at once.
       </div>
       <div style="overflow-x:auto;">
       <table>
-        <thead><tr><th>Reg No</th><th>Student Name</th><th>Department</th>${PERIODS.map(p=>`<th>Period ${p}<br><a href="#" style="font-size:10.5px;font-weight:600;" onclick="event.preventDefault();saveOnePeriodFromGrid(${p});">Save</a></th>`).join('')}</tr></thead>
+        <thead><tr><th>Reg No</th><th>Student Name</th><th>Department</th>${PERIODS.map(p=>{
+          const editable = getAssignedPeriods().includes(p);
+          return `<th>Period ${p}<br>${editable ? `<a href="#" style="font-size:10.5px;font-weight:600;" onclick="event.preventDefault();saveOnePeriodFromGrid(${p});">Save</a>` : `<span style="font-size:10.5px;font-weight:600;color:var(--muted);">View only</span>`}</th>`;
+        }).join('')}</tr></thead>
         <tbody id="attTbody"></tbody>
       </table>
       </div>
     </div>`;
   document.getElementById('attDate').addEventListener('change', drawAttendanceTable);
   if(isAdmin) document.getElementById('attDept').addEventListener('change', drawAttendanceTable);
+  const assigned = getAssignedPeriods();
+  const noteEl = document.getElementById('attAccessNote');
+  if(currentRole==='staff' && assigned.length < PERIODS.length){
+    noteEl.textContent = `You can take/save attendance for Period ${assigned.join(', ')} only. Other periods are shown for reference and cannot be edited by you.`;
+  } else {
+    noteEl.textContent = '';
+  }
   drawAttendanceTable();
 }
 function statusLabel(status){ return status==='absent' ? 'ABSENT' : status==='od' ? 'OD' : 'PRESENT'; }
 function nextStatus(status){ return status==='present' ? 'absent' : status==='od' ? 'present' : 'od'; }
 function odButtonLabel(comment){ return 'OD'+(comment?' 💬':''); }
+function getAssignedPeriods(){
+  // Admin (or a staff record with no periods set) has full access to every period.
+  if(currentRole!=='staff') return PERIODS.slice();
+  const rec = getStaff().find(s=>s.id===currentUser.id);
+  if(!rec || !Array.isArray(rec.periods) || rec.periods.length===0) return PERIODS.slice();
+  return rec.periods.slice();
+}
 function drawAttendanceTable(){
   const date = document.getElementById('attDate').value;
   const deptSel = document.getElementById('attDept').value;
@@ -1042,6 +1089,7 @@ function drawAttendanceTable(){
   const dayRecord = att[date] || {};
   const tb = document.getElementById('attTbody');
   tb.innerHTML = students.length? '' : `<tr><td colspan="${PERIODS.length+3}" class="empty">No students found for this department.</td></tr>`;
+  const assigned = getAssignedPeriods();
   students.forEach(s=>{
     const cells = PERIODS.map(p=>{
       const periodRecord = dayRecord[p] || {};
@@ -1050,7 +1098,9 @@ function drawAttendanceTable(){
       const comment = cellComment(rawVal);
       const title = comment ? ` title="${comment.replace(/"/g,'&quot;')}"` : '';
       const opt = (val,text)=>`<option value="${val}"${status===val?' selected':''}>${text}</option>`;
-      return `<td><select class="status-select ${status}" data-reg="${s.reg}" data-period="${p}" data-status="${status}" data-comment="${comment.replace(/"/g,'&quot;')}"${title} onchange="onStatusSelectChange(this)">${opt('present','PRESENT')}${opt('absent','ABSENT')}${opt('od',odButtonLabel(comment))}</select></td>`;
+      const editable = assigned.includes(p);
+      const disabledAttr = editable ? '' : ' disabled';
+      return `<td><select class="status-select ${status}" data-reg="${s.reg}" data-period="${p}" data-status="${status}" data-comment="${comment.replace(/"/g,'&quot;')}"${title}${disabledAttr} onchange="onStatusSelectChange(this)">${opt('present','PRESENT')}${opt('absent','ABSENT')}${opt('od',odButtonLabel(comment))}</select></td>`;
     }).join('');
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${s.reg}</td><td>${s.name}</td><td><span class="badge-dept">${deptLabel(s.dept)}</span></td>${cells}`;
@@ -1080,7 +1130,7 @@ function onStatusSelectChange(sel){
   }
 }
 function markAllPresentGrid(){
-  document.querySelectorAll('#attTbody .status-select').forEach(sel=>{
+  document.querySelectorAll('#attTbody .status-select:not(:disabled)').forEach(sel=>{
     applyStatusToButton(sel, 'present', '');
   });
 }
@@ -1094,6 +1144,10 @@ function collectEditsForPeriod(period){
   return edits;
 }
 async function saveOnePeriodFromGrid(period){
+  if(!getAssignedPeriods().includes(period)){
+    alert('You are not assigned to Period '+period+', so it cannot be saved from your account.');
+    return;
+  }
   const date = document.getElementById('attDate').value;
   const deptSel = document.getElementById('attDept').value;
   const edits = collectEditsForPeriod(period);
@@ -1112,18 +1166,19 @@ async function saveAllPeriods(){
   const date = document.getElementById('attDate').value;
   const deptSel = document.getElementById('attDept').value;
   const btn = document.getElementById('attSaveBtn');
+  const periodsToSave = getAssignedPeriods();
   if(btn){ btn.disabled = true; }
   let allOk = true;
-  for(let i=0;i<PERIODS.length;i++){
-    const p = PERIODS[i];
-    if(btn){ btn.textContent = `Saving period ${p} of ${PERIODS.length}…`; }
+  for(let i=0;i<periodsToSave.length;i++){
+    const p = periodsToSave[i];
+    if(btn){ btn.textContent = `Saving period ${p} (${i+1} of ${periodsToSave.length})…`; }
     const edits = collectEditsForPeriod(p);
     const ok = await saveAttendancePeriod(date, String(p), edits);
     if(!ok) allOk = false;
   }
   if(btn){ btn.disabled = false; btn.textContent = 'Save All Periods'; }
   if(allOk){
-    alert('Attendance saved for all 7 periods on '+date+(deptSel?' — '+deptLabel(deptSel):''));
+    alert('Attendance saved for Period '+periodsToSave.join(', ')+' on '+date+(deptSel?' — '+deptLabel(deptSel):''));
   } else {
     alert('Some periods could not be saved — check your connection and try again. Any period that did save was not overwritten by the others.');
   }
