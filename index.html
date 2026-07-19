@@ -129,6 +129,12 @@
   .status-btn.absent{background:var(--red-bg);color:var(--red);}
   .status-btn.od{background:var(--blue-bg);color:var(--blue);}
   .status-btn:hover{filter:brightness(0.95);}
+  .status-select{border:1.5px solid transparent;cursor:pointer;padding:4px 26px 4px 11px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;font-family:inherit;outline:none;appearance:none;-webkit-appearance:none;-moz-appearance:none;background-repeat:no-repeat;background-position:right 8px center;background-size:9px;}
+  .status-select.present{background-color:var(--green-bg);color:var(--green);background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%231C9A5B" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');}
+  .status-select.absent{background-color:var(--red-bg);color:var(--red);background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%23D8434A" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');}
+  .status-select.od{background-color:var(--blue-bg);color:var(--blue);background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%232B63C9" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');}
+  .status-select:hover{filter:brightness(0.95);}
+  .status-select:focus{border-color:currentColor;}
 
   .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;}
   .toolbar input,.toolbar select{padding:9px 12px;border:1.5px solid var(--line);border-radius:8px;font-size:13px;background:#fff;}
@@ -1010,7 +1016,7 @@ function renderAttendance(c){
       </div>
       <div id="attPeriodSummary" style="padding:0 2px 6px;font-size:12.5px;color:var(--muted);"></div>
       <div style="padding:0 2px 14px;font-size:12px;color:var(--muted);">
-        Click a period cell to cycle its status: <span class="pill present">PRESENT</span> → <span class="pill absent">ABSENT</span> → <span class="pill od">OD</span>. Marking OD will ask for a short reason/comment (optional). Unmarked students default to Present.
+        Use the dropdown in a period cell to set status: <span class="pill present">PRESENT</span>, <span class="pill absent">ABSENT</span>, or <span class="pill od">OD</span>. Choosing OD will ask for a short reason/comment (optional). Unmarked students default to Present.
         Use the small <b>Save</b> link under a period's name to save just that one period, or <b>Save All Periods</b> to save every column at once.
       </div>
       <div style="overflow-x:auto;">
@@ -1042,9 +1048,9 @@ function drawAttendanceTable(){
       const rawVal = periodRecord[s.reg];
       const status = cellStatus(rawVal) || 'present';
       const comment = cellComment(rawVal);
-      const label = status==='od' ? odButtonLabel(comment) : statusLabel(status);
       const title = comment ? ` title="${comment.replace(/"/g,'&quot;')}"` : '';
-      return `<td><button type="button" class="status-btn ${status}" data-reg="${s.reg}" data-period="${p}" data-status="${status}" data-comment="${comment.replace(/"/g,'&quot;')}"${title} onclick="cycleStatus(this)">${label}</button></td>`;
+      const opt = (val,text)=>`<option value="${val}"${status===val?' selected':''}>${text}</option>`;
+      return `<td><select class="status-select ${status}" data-reg="${s.reg}" data-period="${p}" data-status="${status}" data-comment="${comment.replace(/"/g,'&quot;')}"${title} onchange="onStatusSelectChange(this)">${opt('present','PRESENT')}${opt('absent','ABSENT')}${opt('od',odButtonLabel(comment))}</select></td>`;
     }).join('');
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${s.reg}</td><td>${s.name}</td><td><span class="badge-dept">${deptLabel(s.dept)}</span></td>${cells}`;
@@ -1054,34 +1060,36 @@ function drawAttendanceTable(){
   document.getElementById('attPeriodSummary').textContent =
     `${markedPeriods.length} of 7 periods already have attendance saved for ${date}${markedPeriods.length? ' (Period '+markedPeriods.join(', ')+')':''}.`;
 }
-function applyStatusToButton(btn, status, comment){
-  btn.dataset.status = status;
-  btn.dataset.comment = comment || '';
-  btn.className = 'status-btn '+status;
-  btn.textContent = status==='od' ? odButtonLabel(comment) : statusLabel(status);
-  if(comment){ btn.title = comment; } else { btn.removeAttribute('title'); }
+function applyStatusToButton(sel, status, comment){
+  sel.dataset.status = status;
+  sel.dataset.comment = comment || '';
+  sel.className = 'status-select '+status;
+  sel.value = status;
+  const odOpt = sel.querySelector('option[value="od"]');
+  if(odOpt) odOpt.textContent = odButtonLabel(comment);
+  if(comment){ sel.title = comment; } else { sel.removeAttribute('title'); }
 }
-function cycleStatus(btn){
-  const next = nextStatus(btn.dataset.status);
-  if(next==='od'){
-    const comment = window.prompt('Reason for On Duty (optional):', btn.dataset.comment || '');
-    if(comment===null) return; // staff cancelled — leave status unchanged
-    applyStatusToButton(btn, 'od', comment.trim());
+function onStatusSelectChange(sel){
+  const chosen = sel.value;
+  if(chosen==='od'){
+    const comment = window.prompt('Reason for On Duty (optional):', sel.dataset.comment || '');
+    if(comment===null){ sel.value = sel.dataset.status; return; } // staff cancelled — leave status unchanged
+    applyStatusToButton(sel, 'od', comment.trim());
   } else {
-    applyStatusToButton(btn, next, '');
+    applyStatusToButton(sel, chosen, '');
   }
 }
 function markAllPresentGrid(){
-  document.querySelectorAll('#attTbody .status-btn').forEach(btn=>{
-    applyStatusToButton(btn, 'present', '');
+  document.querySelectorAll('#attTbody .status-select').forEach(sel=>{
+    applyStatusToButton(sel, 'present', '');
   });
 }
 function collectEditsForPeriod(period){
   const edits = {};
-  document.querySelectorAll(`#attTbody .status-btn[data-period="${period}"]`).forEach(btn=>{
-    const status = btn.dataset.status;
-    const comment = btn.dataset.comment;
-    edits[btn.dataset.reg] = (status==='od' && comment) ? {status:'od', comment} : status;
+  document.querySelectorAll(`#attTbody .status-select[data-period="${period}"]`).forEach(sel=>{
+    const status = sel.dataset.status;
+    const comment = sel.dataset.comment;
+    edits[sel.dataset.reg] = (status==='od' && comment) ? {status:'od', comment} : status;
   });
   return edits;
 }
