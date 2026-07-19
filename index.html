@@ -1083,6 +1083,18 @@ function renderReports(c){
         <tbody id="deptOvTbody"></tbody>
       </table>
     </div>` : ''}
+    <div class="card" style="margin-bottom:16px;">
+      <div class="toolbar">
+        <div class="section-title" style="margin:0;flex:1;">Period-wise Attendance</div>
+        <div class="field" style="margin:0;"><label>Date</label><input type="date" id="pwDate" value="${today}"></div>
+      </div>
+      <div style="overflow-x:auto;">
+      <table>
+        <thead><tr><th>Student Name</th>${PERIODS.map(p=>`<th>P${p}</th>`).join('')}</tr></thead>
+        <tbody id="pwTbody"></tbody>
+      </table>
+      </div>
+    </div>
     <div class="card">
       <div class="toolbar">
         <div class="field" style="margin:0;min-width:260px;">
@@ -1100,12 +1112,31 @@ function renderReports(c){
       </table>
     </div>`;
   if(isAdmin){
-    document.getElementById('repDept').addEventListener('change', drawReportTable);
     document.getElementById('deptOvDate').addEventListener('change', drawDeptOverview);
     document.getElementById('deptOvPeriod').addEventListener('change', drawDeptOverview);
     drawDeptOverview();
   }
+  document.getElementById('repDept').addEventListener('change', ()=>{ drawReportTable(); drawPeriodWiseTable(); });
+  document.getElementById('pwDate').addEventListener('change', drawPeriodWiseTable);
   drawReportTable();
+  drawPeriodWiseTable();
+}
+function drawPeriodWiseTable(){
+  const date = document.getElementById('pwDate').value;
+  const deptSel = document.getElementById('repDept') ? document.getElementById('repDept').value : '';
+  let students = getStudents();
+  if(deptSel) students = students.filter(s=>s.dept===deptSel);
+  const att = getAttendance();
+  const dayRecord = att[date] || {};
+  const pillFor = status => status ? `<span class="pill ${status}">${status.toUpperCase()}</span>` : `<span style="color:var(--muted);">—</span>`;
+  const tb = document.getElementById('pwTbody');
+  tb.innerHTML = students.length? '' : `<tr><td colspan="${PERIODS.length+1}" class="empty">No students found for this department.</td></tr>`;
+  students.forEach(s=>{
+    const cells = PERIODS.map(p => `<td>${pillFor(dayRecord[p] ? dayRecord[p][s.reg] : null)}</td>`).join('');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${s.name}</td>${cells}`;
+    tb.appendChild(tr);
+  });
 }
 function drawDeptOverview(){
   const date = document.getElementById('deptOvDate').value;
