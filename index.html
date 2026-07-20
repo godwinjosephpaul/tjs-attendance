@@ -133,6 +133,7 @@
   .status-select.present{background-color:var(--green-bg);color:var(--green);background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%231C9A5B" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');}
   .status-select.absent{background-color:var(--red-bg);color:var(--red);background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%23D8434A" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');}
   .status-select.od{background-color:var(--blue-bg);color:var(--blue);background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%232B63C9" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');}
+  .status-select.unmarked{background-color:#EEF0F4;color:var(--muted);border:1.5px dashed #C7CCD9;background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="%236B7688" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>');}
   .status-select:hover{filter:brightness(0.95);}
   .status-select:focus{border-color:currentColor;}
   .status-select:disabled{cursor:default;opacity:0.55;filter:grayscale(0.4);}
@@ -362,6 +363,19 @@ function getStudents(){ return _state.students; }
 function setStudents(s){ _state.students = s; saveState(); }
 function getStaff(){ return _state.staff; }
 function setStaff(s){ _state.staff = s; saveState(); }
+function staffSubjectsOf(rec){
+  if(!rec) return [];
+  if(Array.isArray(rec.subjects) && rec.subjects.length) return rec.subjects;
+  if(rec.dept){ return [{subject:rec.subject||'', dept:rec.dept, year:'', section:'', periods:Array.isArray(rec.periods)?rec.periods:[]}]; }
+  return [];
+}
+function staffDepts(rec){ return [...new Set(staffSubjectsOf(rec).map(x=>x.dept).filter(Boolean))]; }
+function classLabel(subj){
+  const bits = [deptLabel(subj.dept)];
+  if(subj.year) bits.push('Yr '+subj.year);
+  if(subj.section) bits.push('Sec '+subj.section);
+  return `${subj.subject||'Subject'} — ${bits.join(', ')}`;
+}
 // attendance shape: { "2026-07-18": { "1": {reg: status}, "2": {reg: status}, ... "7": {...} } }
 function getAttendance(){ return _state.attendance; }
 function setAttendance(a){ _state.attendance = a; saveState(); }
@@ -566,7 +580,9 @@ function studentStats(reg){
 function overallStats(deptFilter){
   // "Today" totals are summed across every period marked so far today.
   let students = getStudents();
-  if(deptFilter) students = students.filter(s=>s.dept===deptFilter);
+  if(deptFilter && (Array.isArray(deptFilter) ? deptFilter.length : true)){
+    students = students.filter(s => Array.isArray(deptFilter) ? deptFilter.includes(s.dept) : s.dept===deptFilter);
+  }
   const att = getAttendance();
   const today = todayStr();
   const todayRecord = att[today] || {};
@@ -608,17 +624,20 @@ function renderDashboard(c){
         </p>
       </div>`;
   } else if(currentRole==='staff'){
-    const stats = overallStats(currentUser.dept);
+    const rec = getStaff().find(s=>s.id===currentUser.id);
+    const subjects = staffSubjectsOf(rec);
+    const depts = staffDepts(rec);
+    const stats = overallStats(depts);
     c.innerHTML = `
       <div class="grid grid-4" style="margin-bottom:18px;">
-        <div class="card stat-card"><div class="label">Department</div><div class="val" style="font-size:16px;">${deptLabel(currentUser.dept)}</div></div>
+        <div class="card stat-card"><div class="label">Department(s)</div><div class="val" style="font-size:16px;">${depts.length? depts.map(d=>deptLabel(d)).join(', ') : '—'}</div></div>
         <div class="card stat-card green"><div class="label">Present (marks today)</div><div class="val">${stats.presentToday}</div></div>
         <div class="card stat-card red"><div class="label">Absent (marks today)</div><div class="val">${stats.absentToday}</div></div>
         <div class="card stat-card blue"><div class="label">On Duty (marks today)</div><div class="val">${stats.odToday}</div></div>
       </div>
       <div class="card">
         <div class="section-title">Quick Actions</div>
-        <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Subject: <b>${currentUser.subject||'—'}</b> &nbsp;|&nbsp; Dept: <span class="badge-dept">${deptLabel(currentUser.dept)}</span> &nbsp;|&nbsp; ${stats.periodsMarked} of 7 periods marked today</p>
+        <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Subjects: ${subjects.length? subjects.map(s=>`<b>${s.subject||'—'}</b> (${deptLabel(s.dept)}${s.year? ' - Yr '+s.year:''}${s.section? ' '+s.section:''})`).join(', ') : '—'} &nbsp;|&nbsp; ${stats.periodsMarked} of 7 periods marked today</p>
         <button class="btn blue" onclick="activePage='attendance';renderNavActive();renderPage();">Take Attendance</button>
       </div>`;
   } else {
@@ -838,7 +857,7 @@ function renderStaff(c){
         <button class="btn outline" onclick="openBulkStaffUploadModal()">⬆ Bulk Upload (CSV)</button>
       </div>
       <table>
-        <thead><tr><th>Staff ID</th><th>Name</th><th>Department</th><th>Subject</th><th>Mobile</th><th>Action</th></tr></thead>
+        <thead><tr><th>Staff ID</th><th>Name</th><th>Department(s)</th><th>Subject(s)</th><th>Mobile</th><th>Action</th></tr></thead>
         <tbody id="stfTbody"></tbody>
       </table>
     </div>`;
@@ -847,13 +866,15 @@ function renderStaff(c){
     const df = document.getElementById('stfDeptFilter').value;
     const list = staff.filter(s=>
       (s.name.toLowerCase().includes(q)||s.id.toLowerCase().includes(q)) &&
-      (!df || s.dept===df)
+      (!df || staffDepts(s).includes(df))
     );
     const tb = document.getElementById('stfTbody');
     tb.innerHTML = list.length? '' : `<tr><td colspan="6" class="empty">No staff found</td></tr>`;
     list.forEach(s=>{
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${s.id}</td><td>${s.name}</td><td><span class="badge-dept" title="${deptFullName(s.dept)}">${deptLabel(s.dept)}</span></td><td>${s.subject||'-'}</td><td>${s.mobile||'-'}</td>
+      const deptChips = staffDepts(s).map(d=>`<span class="badge-dept" title="${deptFullName(d)}">${deptLabel(d)}</span>`).join(' ') || '-';
+      const subjNames = staffSubjectsOf(s).map(x=>x.subject||'—').join(', ') || '-';
+      tr.innerHTML = `<td>${s.id}</td><td>${s.name}</td><td>${deptChips}</td><td>${subjNames}</td><td>${s.mobile||'-'}</td>
         <td><button class="btn sm outline" onclick="openStaffModal('${s.id}')">Edit</button>
         <button class="btn sm red" onclick="deleteStaff('${s.id}')">Delete</button></td>`;
       tb.appendChild(tr);
@@ -863,9 +884,42 @@ function renderStaff(c){
   document.getElementById('stfSearch').addEventListener('input', draw);
   document.getElementById('stfDeptFilter').addEventListener('change', draw);
 }
+function subjectRowHTML(subj){
+  subj = subj || {};
+  return `<div class="subject-row" style="border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <div class="field" style="flex:1;min-width:140px;margin:0;"><label>Subject</label><input class="rowSubject" value="${subj.subject||''}" placeholder="e.g. Operating Systems"></div>
+      <div class="field" style="flex:1;min-width:180px;margin:0;"><label>Department</label><select class="rowDept">${deptOptionsHTML(subj.dept||'')}</select></div>
+      <div class="field" style="width:90px;margin:0;"><label>Year</label><input class="rowYear" value="${subj.year||''}" placeholder="e.g. II"></div>
+      <div class="field" style="width:100px;margin:0;"><label>Section</label><input class="rowSection" value="${subj.section||''}" placeholder="optional"></div>
+    </div>
+    <div class="field" style="margin:8px 0 0;">
+      <label>Periods for this subject (leave unchecked = all periods)</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">${PERIODS.map(p=>{
+        const on = Array.isArray(subj.periods) && subj.periods.includes(p);
+        return `<label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:12.5px;"><input type="checkbox" class="rowPeriodChk" value="${p}" ${on?'checked':''}> P${p}</label>`;
+      }).join('')}</div>
+    </div>
+    <div style="text-align:right;margin-top:6px;"><button type="button" class="btn sm outline" onclick="this.closest('.subject-row').remove()">Remove Subject</button></div>
+  </div>`;
+}
+function addSubjectRow(){
+  document.getElementById('fSubjectsRows').insertAdjacentHTML('beforeend', subjectRowHTML());
+}
+function collectSubjectRows(){
+  return Array.from(document.querySelectorAll('#fSubjectsRows .subject-row')).map(row=>{
+    const subject = row.querySelector('.rowSubject').value.trim();
+    const dept = row.querySelector('.rowDept').value;
+    const year = row.querySelector('.rowYear').value.trim();
+    const section = row.querySelector('.rowSection').value.trim();
+    const periods = Array.from(row.querySelectorAll('.rowPeriodChk:checked')).map(el=>Number(el.value));
+    return {subject,dept,year,section,periods};
+  }).filter(x=>x.subject || x.dept);
+}
 function openStaffModal(id){
   const staffList = getStaff();
   const editing = id ? staffList.find(s=>s.id===id) : null;
+  const initialSubjects = editing ? staffSubjectsOf(editing) : [];
   const bg = document.createElement('div');
   bg.className='modal-bg';
   bg.innerHTML = `
@@ -873,17 +927,12 @@ function openStaffModal(id){
       <h3>${editing?'Edit Staff':'Add Staff'}</h3>
       <div class="field"><label>Staff ID (used as login username)</label><input id="fId" value="${editing?editing.id:''}" ${editing?'disabled':''}></div>
       <div class="field"><label>Full Name</label><input id="fName" value="${editing?editing.name:''}"></div>
-      <div class="field"><label>Department</label><select id="fDept">${deptOptionsHTML(editing?editing.dept:'CSE')}</select></div>
-      <div class="field"><label>Subject Handling</label><input id="fSubject" value="${editing?editing.subject||'':''}" placeholder="e.g. DBMS"></div>
       <div class="field"><label>Mobile</label><input id="fMobile" value="${editing?editing.mobile||'':''}"></div>
       <div class="field">
-        <label>Periods Responsible For (leave all unchecked = full access to all periods)</label>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;padding:6px 0;">
-          ${PERIODS.map(p=>{
-            const assigned = editing && Array.isArray(editing.periods) && editing.periods.includes(p);
-            return `<label style="display:flex;align-items:center;gap:4px;font-weight:400;font-size:13px;"><input type="checkbox" class="fPeriodChk" value="${p}" ${assigned?'checked':''}> P${p}</label>`;
-          }).join('')}
-        </div>
+        <label>Subjects Handled</label>
+        <p style="color:var(--muted);font-size:12px;margin:0 0 8px;">Add one row per subject this staff member teaches — each can be a different department, year and set of periods (e.g. one staff can teach OS for CSE Year II and DBMS for ECE Year III).</p>
+        <div id="fSubjectsRows"></div>
+        <button type="button" class="btn sm outline" onclick="addSubjectRow()">+ Add Subject</button>
       </div>
       <div class="field">
         <label>${editing?'Reset Password (leave blank to keep current)':'Set Login Password'}</label>
@@ -895,26 +944,26 @@ function openStaffModal(id){
       </div>
     </div>`;
   document.body.appendChild(bg);
+  document.getElementById('fSubjectsRows').innerHTML = (initialSubjects.length? initialSubjects : [null]).map(subjectRowHTML).join('');
 }
 function saveStaff(editingId){
   const id = document.getElementById('fId').value.trim();
   const name = document.getElementById('fName').value.trim();
-  const dept = document.getElementById('fDept').value;
-  const subject = document.getElementById('fSubject').value.trim();
   const mobile = document.getElementById('fMobile').value.trim();
   const newPassword = document.getElementById('fPassword').value.trim();
-  const periods = Array.from(document.querySelectorAll('.fPeriodChk:checked')).map(el=>Number(el.value));
+  const subjects = collectSubjectRows();
   if(!id || !name){ alert('Staff ID and name are required'); return; }
+  if(subjects.length===0){ alert('Add at least one subject (with a department) for this staff member.'); return; }
   let staffList = getStaff();
   if(editingId){
     staffList = staffList.map(s=>{
       if(s.id!==editingId) return s;
-      return {id,name,dept,subject,mobile,periods,password:newPassword? newPassword : s.password};
+      return {id,name,mobile,subjects,password:newPassword? newPassword : s.password};
     });
   } else {
     if(staffList.some(s=>s.id===id)){ alert('A staff member with this ID already exists'); return; }
     if(!newPassword){ alert('Please set a login password for this staff member'); return; }
-    staffList.push({id,name,dept,subject,mobile,periods,password:newPassword});
+    staffList.push({id,name,mobile,subjects,password:newPassword});
   }
   setStaff(staffList);
   document.querySelector('.modal-bg').remove();
@@ -928,12 +977,28 @@ function deleteStaff(id){
 
 /* ============================================================
    BULK STAFF UPLOAD (admin) — CSV import
-   Expected columns: id,name,dept,subject,mobile,password
+   Preferred columns: id,name,mobile,password,subjects
+   "subjects" holds one or more class assignments, separated by ; —
+   each assignment is Subject|Department|Year|Section|Periods
+   (Year, Section, Periods may be left blank). Example:
+   "OS|CSE|II||1,2;DBMS|ECE|III||3,4"
+   For simple single-subject staff, the legacy columns
+   dept,subject,periods are still accepted instead of "subjects".
    Staff log in with their NAME + password. "id" is just an
    internal unique reference (like an employee code).
    ============================================================ */
+function parseSubjectsCell(raw){
+  if(!raw) return null;
+  const rows = raw.split(';').map(part=>part.trim()).filter(Boolean).map(part=>{
+    const bits = part.split('|').map(b=>b.trim());
+    const subject = bits[0]||'', dept = bits[1]||'', year = bits[2]||'', section = bits[3]||'', periodsRaw = bits[4]||'';
+    const periods = periodsRaw ? periodsRaw.split(/[,]/).map(x=>Number(x.trim())).filter(n=>PERIODS.includes(n)) : [];
+    return {subject, dept, year, section, periods};
+  }).filter(x=>x.subject || x.dept);
+  return rows.length ? rows : null;
+}
 function downloadStaffCSVTemplate(){
-  const csv = 'id,name,dept,subject,mobile,password,periods\nstaff001,Prof. Sample Name,CSE,DBMS,9876543210,changeme123,"1,2,3"';
+  const csv = 'id,name,mobile,password,subjects\nstaff001,Prof. Sample Name,9876543210,changeme123,"OS|CSE|II||1,2;DBMS|ECE|III||3,4"';
   const blob = new Blob([csv], {type:'text/csv'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -947,7 +1012,8 @@ function openBulkStaffUploadModal(){
     <div class="modal">
       <h3>Bulk Upload Staff</h3>
       <p style="color:var(--muted);font-size:14px;margin:0 0 12px;">
-        Upload a CSV file with columns: <b>id, name, dept, subject, mobile, password</b>, plus an optional <b>periods</b> column (e.g. "1,3,5" — the periods that staff member can take attendance for; leave blank for full access to all periods).<br>
+        Upload a CSV file with columns: <b>id, name, mobile, password</b>, plus <b>subjects</b> — one or more classes this staff member teaches, separated by <b>;</b>, each written as <code>Subject|Department|Year|Section|Periods</code> (Year, Section and Periods may be left blank — blank Periods means full access to all periods for that class). Example: <code>OS|CSE|II||1,2;DBMS|ECE|III||3,4</code>.<br>
+        For staff who only teach one subject, the older columns <b>dept, subject, periods</b> also still work instead of <b>subjects</b>.<br>
         Staff log in using their <b>name</b> and <b>password</b> — "id" is just an internal reference and must be unique per staff member.
         Existing ids will be updated (password only changes if a new one is given); new ids will be added.
       </p>
@@ -973,11 +1039,14 @@ function processBulkStaffUpload(){
       const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
       if(lines.length < 2){ msg.textContent = 'CSV file appears to be empty.'; return; }
       const header = parseCSVLine(lines[0]).map(h=>h.toLowerCase());
-      const required = ['id','name','dept','subject','mobile','password'];
+      const required = ['id','name','mobile','password'];
       const missing = required.filter(r=>!header.includes(r));
       if(missing.length){ msg.textContent = 'Missing required column(s): ' + missing.join(', '); return; }
       const idx = {};
       required.forEach(r=> idx[r] = header.indexOf(r));
+      idx.subjects = header.indexOf('subjects');
+      idx.dept = header.indexOf('dept');
+      idx.subject = header.indexOf('subject');
       idx.periods = header.indexOf('periods');
 
       let staffList = getStaff();
@@ -987,20 +1056,25 @@ function processBulkStaffUpload(){
         const id = (cols[idx.id]||'').trim();
         const name = (cols[idx.name]||'').trim();
         if(!id || !name){ skipped++; continue; }
-        const dept = (cols[idx.dept]||'').trim();
-        const subject = (cols[idx.subject]||'').trim();
         const mobile = (cols[idx.mobile]||'').trim();
         const password = (cols[idx.password]||'').trim();
-        const periodsRaw = idx.periods>=0 ? (cols[idx.periods]||'').trim() : '';
-        const periods = periodsRaw ? periodsRaw.split(/[|,]/).map(x=>Number(x.trim())).filter(n=>PERIODS.includes(n)) : [];
+        const subjectsRaw = idx.subjects>=0 ? (cols[idx.subjects]||'').trim() : '';
+        let subjects = parseSubjectsCell(subjectsRaw);
+        if(!subjects){
+          const dept = idx.dept>=0 ? (cols[idx.dept]||'').trim() : '';
+          const subject = idx.subject>=0 ? (cols[idx.subject]||'').trim() : '';
+          const periodsRaw = idx.periods>=0 ? (cols[idx.periods]||'').trim() : '';
+          const periods = periodsRaw ? periodsRaw.split(/[|,]/).map(x=>Number(x.trim())).filter(n=>PERIODS.includes(n)) : [];
+          subjects = dept ? [{subject, dept, year:'', section:'', periods}] : null;
+        }
         const existingIdx = staffList.findIndex(s=>s.id===id);
         if(existingIdx>=0){
           const prev = staffList[existingIdx];
-          staffList[existingIdx] = {id,name,dept,subject,mobile,periods: periodsRaw? periods : (prev.periods||[]),password: password? password : prev.password};
+          staffList[existingIdx] = {id,name,mobile,subjects: subjects || staffSubjectsOf(prev),password: password? password : prev.password};
           updated++;
         } else {
-          if(!password){ skipped++; continue; }
-          staffList.push({id,name,dept,subject,mobile,periods,password});
+          if(!password || !subjects){ skipped++; continue; }
+          staffList.push({id,name,mobile,subjects,password});
           added++;
         }
       }
@@ -1028,17 +1102,26 @@ async function renderAttendance(c){
   if(currentRole==='staff'){ await refreshStaffFromServer(); }
   const dateVal = todayStr();
   const isAdmin = currentRole==='admin';
-  const lockedDept = isAdmin ? '' : currentUser.dept;
+  const staffRec = isAdmin ? null : getStaff().find(s=>s.id===currentUser.id);
+  const staffSubjects = isAdmin ? [] : staffSubjectsOf(staffRec);
+  const hasSubjects = staffSubjects.length > 0;
   c.innerHTML = `
     <div class="card">
       <div class="toolbar">
         <div class="field" style="margin:0;"><label>Date</label><input type="date" id="attDate" value="${dateVal}"></div>
+        ${!isAdmin && hasSubjects ? `
         <div class="field" style="margin:0;min-width:260px;">
+          <label>Subject / Class</label>
+          <select id="attClassSel">${staffSubjects.map((s,i)=>`<option value="${i}">${classLabel(s)}</option>`).join('')}</select>
+        </div>` : ''}
+        <div class="field" style="margin:0;min-width:220px;">
           <label>Department</label>
           ${isAdmin
             ? `<select id="attDept"><option value="">All Departments</option>${deptOptionsHTML()}</select>`
-            : `<select id="attDept" disabled><option value="${lockedDept}" selected>${deptFullName(lockedDept)}</option></select>`}
+            : `<select id="attDept" ${hasSubjects?'disabled':''}>${hasSubjects?'':`<option value="">All Departments</option>${deptOptionsHTML()}`}</select>`}
         </div>
+        <div class="field" style="margin:0;width:100px;"><label>Year</label><input id="attYear" placeholder="All" ${!isAdmin && hasSubjects?'disabled':''}></div>
+        <div class="field" style="margin:0;width:110px;"><label>Section</label><input id="attSection" placeholder="All" ${!isAdmin && hasSubjects?'disabled':''}></div>
         <div style="flex:1;"></div>
         <button class="btn outline" onclick="markAllPresentGrid()">Mark All Present</button>
         <button class="btn green" id="attSaveBtn" onclick="saveAllPeriods()">Save All Periods</button>
@@ -1046,61 +1129,106 @@ async function renderAttendance(c){
       <div id="attPeriodSummary" style="padding:0 2px 6px;font-size:12.5px;color:var(--muted);"></div>
       <div id="attAccessNote" style="padding:0 2px 6px;font-size:12.5px;color:var(--blue);font-weight:600;"></div>
       <div style="padding:0 2px 14px;font-size:12px;color:var(--muted);">
-        Use the dropdown in a period cell to set status: <span class="pill present">PRESENT</span>, <span class="pill absent">ABSENT</span>, or <span class="pill od">OD</span>. Choosing OD will ask for a short reason/comment (optional). Unmarked students default to Present.
+        Each period cell starts as <b>Not Marked</b> until you choose a status. Use the dropdown in a period cell to set status: <span class="pill present">PRESENT</span>, <span class="pill absent">ABSENT</span>, or <span class="pill od">OD</span>. Choosing OD will ask for a short reason/comment (optional). Any student left Not Marked when you save will be saved as Present.
         Use the small <b>Save</b> link under a period's name to save just that one period, or <b>Save All Periods</b> to save every period you have access to at once.
+        ${!isAdmin && hasSubjects ? ' Pick the class you\'re teaching from <b>Subject / Class</b> above — the student list, department, year and section update to match.' : ''}
       </div>
       <div style="overflow-x:auto;">
       <table>
-        <thead><tr><th>Reg No</th><th>Student Name</th><th>Department</th>${PERIODS.map(p=>{
-          const editable = getAssignedPeriods().includes(p);
-          return `<th>Period ${p}<br>${editable ? `<a href="#" style="font-size:10.5px;font-weight:600;" onclick="event.preventDefault();saveOnePeriodFromGrid(${p});">Save</a>` : `<span style="font-size:10.5px;font-weight:600;color:var(--muted);">View only</span>`}</th>`;
-        }).join('')}</tr></thead>
+        <thead id="attThead"><tr><th>Reg No</th><th>Student Name</th><th>Department</th>${periodHeaderCells()}</tr></thead>
         <tbody id="attTbody"></tbody>
       </table>
       </div>
     </div>`;
   document.getElementById('attDate').addEventListener('change', drawAttendanceTable);
-  if(isAdmin) document.getElementById('attDept').addEventListener('change', drawAttendanceTable);
+  if(isAdmin){
+    document.getElementById('attDept').addEventListener('change', drawAttendanceTable);
+    document.getElementById('attYear').addEventListener('input', drawAttendanceTable);
+    document.getElementById('attSection').addEventListener('input', drawAttendanceTable);
+  } else if(hasSubjects){
+    document.getElementById('attClassSel').addEventListener('change', applySelectedClass);
+    applySelectedClass();
+    return; // applySelectedClass already draws the table and updates the note
+  } else {
+    document.getElementById('attDept').addEventListener('change', drawAttendanceTable);
+    document.getElementById('attYear').addEventListener('input', drawAttendanceTable);
+    document.getElementById('attSection').addEventListener('input', drawAttendanceTable);
+  }
+  updateAccessNote();
+  drawAttendanceTable();
+}
+function applySelectedClass(){
+  const sel = document.getElementById('attClassSel');
+  const staffRec = getStaff().find(s=>s.id===currentUser.id);
+  const subjects = staffSubjectsOf(staffRec);
+  const subj = subjects[Number(sel.value)] || subjects[0];
+  document.getElementById('attDept').innerHTML = `<option value="${subj.dept}" selected>${deptFullName(subj.dept)}</option>`;
+  document.getElementById('attYear').value = subj.year || '';
+  document.getElementById('attSection').value = subj.section || '';
+  refreshPeriodHeader();
+  updateAccessNote();
+  drawAttendanceTable();
+}
+function refreshPeriodHeader(){
+  const row = document.querySelector('#attThead tr');
+  if(row) row.innerHTML = `<th>Reg No</th><th>Student Name</th><th>Department</th>${periodHeaderCells()}`;
+}
+function periodHeaderCells(){
+  const assigned = getAssignedPeriods();
+  return PERIODS.map(p=>{
+    const editable = assigned.includes(p);
+    return `<th>Period ${p}<br>${editable ? `<a href="#" style="font-size:10.5px;font-weight:600;" onclick="event.preventDefault();saveOnePeriodFromGrid(${p});">Save</a>` : `<span style="font-size:10.5px;font-weight:600;color:var(--muted);">View only</span>`}</th>`;
+  }).join('');
+}
+function updateAccessNote(){
   const assigned = getAssignedPeriods();
   const noteEl = document.getElementById('attAccessNote');
+  if(!noteEl) return;
   if(currentRole==='staff' && assigned.length < PERIODS.length){
-    noteEl.textContent = `You can take/save attendance for Period ${assigned.join(', ')} only. Other periods are shown for reference and cannot be edited by you.`;
+    noteEl.textContent = `You can take/save attendance for Period ${assigned.join(', ')} only for this class. Other periods are shown for reference and cannot be edited by you.`;
   } else {
     noteEl.textContent = '';
   }
-  drawAttendanceTable();
 }
-function statusLabel(status){ return status==='absent' ? 'ABSENT' : status==='od' ? 'OD' : 'PRESENT'; }
+function statusLabel(status){ return status==='absent' ? 'ABSENT' : status==='od' ? 'OD' : status==='present' ? 'PRESENT' : 'NOT MARKED'; }
 function nextStatus(status){ return status==='present' ? 'absent' : status==='od' ? 'present' : 'od'; }
 function odButtonLabel(comment){ return 'OD'+(comment?' 💬':''); }
 function getAssignedPeriods(){
-  // Admin (or a staff record with no periods set) has full access to every period.
+  // Admin has full access to every period.
   if(currentRole!=='staff') return PERIODS.slice();
   const rec = getStaff().find(s=>s.id===currentUser.id);
-  if(!rec || !Array.isArray(rec.periods) || rec.periods.length===0) return PERIODS.slice();
-  return rec.periods.slice();
+  const subjects = staffSubjectsOf(rec);
+  if(subjects.length===0) return PERIODS.slice(); // no subjects configured yet = full access fallback
+  const sel = document.getElementById('attClassSel');
+  const subj = sel ? subjects[Number(sel.value)] : subjects[0];
+  if(!subj || !Array.isArray(subj.periods) || subj.periods.length===0) return PERIODS.slice();
+  return subj.periods.slice();
 }
 function drawAttendanceTable(){
   const date = document.getElementById('attDate').value;
   const deptSel = document.getElementById('attDept').value;
+  const yearSel = (document.getElementById('attYear').value||'').trim();
+  const sectionSel = (document.getElementById('attSection').value||'').trim();
   let students = getStudents();
   if(deptSel) students = students.filter(s=>s.dept===deptSel);
+  if(yearSel) students = students.filter(s=>(s.year||'').toLowerCase()===yearSel.toLowerCase());
+  if(sectionSel) students = students.filter(s=>(s.section||'').toLowerCase()===sectionSel.toLowerCase());
   const att = getAttendance();
   const dayRecord = att[date] || {};
   const tb = document.getElementById('attTbody');
-  tb.innerHTML = students.length? '' : `<tr><td colspan="${PERIODS.length+3}" class="empty">No students found for this department.</td></tr>`;
+  tb.innerHTML = students.length? '' : `<tr><td colspan="${PERIODS.length+3}" class="empty">No students found for this class.</td></tr>`;
   const assigned = getAssignedPeriods();
   students.forEach(s=>{
     const cells = PERIODS.map(p=>{
       const periodRecord = dayRecord[p] || {};
       const rawVal = periodRecord[s.reg];
-      const status = cellStatus(rawVal) || 'present';
+      const status = cellStatus(rawVal) || 'unmarked';
       const comment = cellComment(rawVal);
       const title = comment ? ` title="${comment.replace(/"/g,'&quot;')}"` : '';
       const opt = (val,text)=>`<option value="${val}"${status===val?' selected':''}>${text}</option>`;
       const editable = assigned.includes(p);
       const disabledAttr = editable ? '' : ' disabled';
-      return `<td><select class="status-select ${status}" data-reg="${s.reg}" data-period="${p}" data-status="${status}" data-comment="${comment.replace(/"/g,'&quot;')}"${title}${disabledAttr} onchange="onStatusSelectChange(this)">${opt('present','PRESENT')}${opt('absent','ABSENT')}${opt('od',odButtonLabel(comment))}</select></td>`;
+      return `<td><select class="status-select ${status}" data-reg="${s.reg}" data-period="${p}" data-status="${status}" data-comment="${comment.replace(/"/g,'&quot;')}"${title}${disabledAttr} onchange="onStatusSelectChange(this)">${opt('unmarked','NOT MARKED')}${opt('present','PRESENT')}${opt('absent','ABSENT')}${opt('od',odButtonLabel(comment))}</select></td>`;
     }).join('');
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${s.reg}</td><td>${s.name}</td><td><span class="badge-dept">${deptLabel(s.dept)}</span></td>${cells}`;
@@ -1129,6 +1257,7 @@ function onStatusSelectChange(sel){
     applyStatusToButton(sel, chosen, '');
   }
 }
+
 function markAllPresentGrid(){
   document.querySelectorAll('#attTbody .status-select:not(:disabled)').forEach(sel=>{
     applyStatusToButton(sel, 'present', '');
@@ -1137,7 +1266,7 @@ function markAllPresentGrid(){
 function collectEditsForPeriod(period){
   const edits = {};
   document.querySelectorAll(`#attTbody .status-select[data-period="${period}"]`).forEach(sel=>{
-    const status = sel.dataset.status;
+    const status = (sel.dataset.status && sel.dataset.status!=='unmarked') ? sel.dataset.status : 'present';
     const comment = sel.dataset.comment;
     edits[sel.dataset.reg] = (status==='od' && comment) ? {status:'od', comment} : status;
   });
@@ -1188,9 +1317,11 @@ async function saveAllPeriods(){
 /* ============================================================
    REPORTS (admin + staff)
    ============================================================ */
+let _reportsMyDepts = [];
 function renderReports(c){
   const isAdmin = currentRole==='admin';
-  const lockedDept = isAdmin ? '' : currentUser.dept;
+  const staffRec = isAdmin ? null : getStaff().find(s=>s.id===currentUser.id);
+  _reportsMyDepts = isAdmin ? [] : staffDepts(staffRec);
   const today = todayStr();
   c.innerHTML = `
     ${isAdmin ? `
@@ -1226,7 +1357,9 @@ function renderReports(c){
           <label>Department</label>
           ${isAdmin
             ? `<select id="repDept"><option value="">All Departments</option>${deptOptionsHTML()}</select>`
-            : `<select id="repDept" disabled><option value="${lockedDept}" selected>${deptFullName(lockedDept)}</option></select>`}
+            : (_reportsMyDepts.length>1
+                ? `<select id="repDept"><option value="">All My Departments</option>${_reportsMyDepts.map(d=>`<option value="${d}">${deptFullName(d)}</option>`).join('')}</select>`
+                : `<select id="repDept" ${_reportsMyDepts.length?'disabled':''}><option value="${_reportsMyDepts[0]||''}" selected>${_reportsMyDepts[0]?deptFullName(_reportsMyDepts[0]):'All Departments'}</option></select>`)}
         </div>
         <div style="flex:1;"></div>
         <button class="btn outline" onclick="exportCSV()">⬇ Export CSV</button>
@@ -1251,6 +1384,7 @@ function drawPeriodWiseTable(){
   const deptSel = document.getElementById('repDept') ? document.getElementById('repDept').value : '';
   let students = getStudents();
   if(deptSel) students = students.filter(s=>s.dept===deptSel);
+  else if(currentRole==='staff' && _reportsMyDepts.length) students = students.filter(s=>_reportsMyDepts.includes(s.dept));
   const att = getAttendance();
   const dayRecord = att[date] || {};
   const pillFor = val => {
@@ -1317,6 +1451,7 @@ function drawReportTable(){
   const deptSel = document.getElementById('repDept').value;
   let students = getStudents();
   if(deptSel) students = students.filter(s=>s.dept===deptSel);
+  else if(currentRole==='staff' && _reportsMyDepts.length) students = students.filter(s=>_reportsMyDepts.includes(s.dept));
   const tb = document.getElementById('repTbody');
   tb.innerHTML = students.length? '' : `<tr><td colspan="6" class="empty">No records yet</td></tr>`;
   students.forEach(s=>{
