@@ -6,6 +6,7 @@
 <title>TJS Engineering College — Attendance System</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root{
     --navy:#152B4E;
@@ -1748,13 +1749,18 @@ function renderWeekly(c){
                 ? `<select id="weekDept"><option value="">All My Departments</option>${myDepts.map(d=>`<option value="${d}">${deptFullName(d)}</option>`).join('')}</select>`
                 : `<select id="weekDept" ${myDepts.length?'disabled':''}><option value="${myDepts[0]||''}" selected>${myDepts[0]?deptFullName(myDepts[0]):'All Departments'}</option></select>`)}
         </div>
+        <div class="field" style="margin:0;min-width:160px;">
+          <label>Year</label>
+          <select id="weekYear"><option value="">All Years</option></select>
+        </div>
       </div>
-      <p style="color:var(--muted);font-size:12.5px;margin:0;">Shows Present / Absent for the current date across the whole week (Monday–Sunday). Select students below, then download their weekly attendance as a CSV to submit.</p>
+      <p style="color:var(--muted);font-size:12.5px;margin:0;">Shows Present / Absent for the current date across the whole week (Monday–Sunday). Select students below, then download their weekly attendance as a CSV or Excel file to submit.</p>
     </div>
     <div class="card">
       <div class="toolbar">
         <div style="flex:1;font-weight:700;font-size:13.5px;color:var(--navy);" id="weekRangeLabel"></div>
-        <button class="btn outline" onclick="downloadWeeklyCSV()">⬇ Download Selected & Submit</button>
+        <button class="btn outline" onclick="downloadWeeklyCSV()">⬇ Download CSV</button>
+        <button class="btn outline" onclick="downloadWeeklyExcel()">⬇ Download Excel</button>
       </div>
       <div style="overflow-x:auto;">
       <table>
@@ -1764,8 +1770,27 @@ function renderWeekly(c){
       </div>
     </div>`;
   document.getElementById('weekAnchor').addEventListener('change', drawWeeklyTable);
-  document.getElementById('weekDept').addEventListener('change', drawWeeklyTable);
+  document.getElementById('weekDept').addEventListener('change', ()=>{ populateWeekYearOptions(); drawWeeklyTable(); });
+  document.getElementById('weekYear').addEventListener('change', drawWeeklyTable);
+  populateWeekYearOptions();
   drawWeeklyTable();
+}
+function populateWeekYearOptions(){
+  const deptSel = document.getElementById('weekDept').value;
+  let students = getStudents();
+  if(deptSel) students = students.filter(s=>s.dept===deptSel);
+  else if(currentRole==='staff'){
+    const staffRec = getStaff().find(s=>s.id===currentUser.id);
+    const myDepts = staffDepts(staffRec);
+    if(myDepts.length) students = students.filter(s=>myDepts.includes(s.dept));
+  }
+  const YEAR_ORDER = {'I':1,'II':2,'III':3,'IV':4};
+  const years = [...new Set(students.map(s=>s.year).filter(Boolean))]
+    .sort((a,b)=>(YEAR_ORDER[a]||99)-(YEAR_ORDER[b]||99) || a.localeCompare(b));
+  const sel = document.getElementById('weekYear');
+  const current = sel.value;
+  sel.innerHTML = `<option value="">All Years</option>` + years.map(y=>`<option value="${y}">${yearOrdinalLabel(y)}</option>`).join('');
+  if(years.includes(current)) sel.value = current;
 }
 function drawWeeklyTable(){
   const anchor = document.getElementById('weekAnchor').value;
@@ -1786,6 +1811,8 @@ function drawWeeklyTable(){
     const myDepts = staffDepts(staffRec);
     if(myDepts.length) students = students.filter(s=>myDepts.includes(s.dept));
   }
+  const yearSel = document.getElementById('weekYear').value;
+  if(yearSel) students = students.filter(s=>s.year===yearSel);
 
   const pillFor = status => {
     if(!status) return `<span style="color:var(--muted);">—</span>`;
@@ -1804,23 +1831,27 @@ function drawWeeklyTable(){
     document.querySelectorAll('.weekRowCheck').forEach(cb=>{ cb.checked = this.checked; });
   });
 }
-function downloadWeeklyCSV(){
+function collectWeeklySelection(){
   const anchor = document.getElementById('weekAnchor').value;
   const monday = mondayOf(anchor);
   const dates = weekDatesFrom(monday);
   const selectedRegs = [...document.querySelectorAll('.weekRowCheck:checked')].map(cb=>cb.dataset.reg);
-
+  const students = getStudents().filter(s=>selectedRegs.includes(s.reg));
+  return {dates, selectedRegs, students};
+}
+function weeklyRowFor(s, dates){
+  const dayCells = dates.map(d => {
+    const st = dayStatusForStudent(s.reg, d);
+    return st ? st.toUpperCase() : 'NOT MARKED';
+  });
+  return [s.reg, s.name, deptLabel(s.dept), s.year||'', s.section||'', ...dayCells];
+}
+function downloadWeeklyCSV(){
+  const {dates, selectedRegs, students} = collectWeeklySelection();
   if(selectedRegs.length===0){ alert('Select at least one student (use the checkbox in the header to select all).'); return; }
 
-  const students = getStudents().filter(s=>selectedRegs.includes(s.reg));
-  const rows = [['Reg No','Name','Department', ...dates]];
-  students.forEach(s=>{
-    const dayCells = dates.map(d => {
-      const st = dayStatusForStudent(s.reg, d);
-      return st ? st.toUpperCase() : 'NOT MARKED';
-    });
-    rows.push([s.reg, s.name, deptLabel(s.dept), ...dayCells]);
-  });
+  const rows = [['Reg No','Name','Department','Year','Section', ...dates]];
+  students.forEach(s=> rows.push(weeklyRowFor(s, dates)));
   const csv = rows.map(r=>r.join(',')).join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
   const url = URL.createObjectURL(blob);
@@ -1828,6 +1859,35 @@ function downloadWeeklyCSV(){
   a.href = url; a.download = `weekly_attendance_${dates[0]}_to_${dates[6]}.csv`; a.click();
   URL.revokeObjectURL(url);
   alert(`${selectedRegs.length} student(s) downloaded and marked as submitted for this week.`);
+}
+function downloadWeeklyExcel(){
+  const {dates, selectedRegs, students} = collectWeeklySelection();
+  if(selectedRegs.length===0){ alert('Select at least one student (use the checkbox in the header to select all).'); return; }
+  if(typeof XLSX==='undefined'){ alert('Excel export library did not load — check your network connection and try again.'); return; }
+
+  const dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const header = ['Reg No','Name','Department','Year','Section', ...dates.map((d,i)=>`${dayNames[i]} ${d.slice(5)}`)];
+  const wb = XLSX.utils.book_new();
+
+  const allData = [header, ...students.map(s=>weeklyRowFor(s, dates))];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(allData), 'All Selected');
+
+  // One sheet per Department + Year combination, so the download is
+  // organised the way a HOD/Principal would want to submit it.
+  const groups = {};
+  students.forEach(s=>{
+    const key = deptLabel(s.dept) + (s.year ? ' - ' + yearOrdinalLabel(s.year) : '');
+    if(!groups[key]) groups[key] = [];
+    groups[key].push(s);
+  });
+  Object.keys(groups).sort().forEach(key=>{
+    const sheetName = key.replace(/[\\/?*\[\]:]/g,'').slice(0,31) || 'Sheet1';
+    const data = [header, ...groups[key].map(s=>weeklyRowFor(s, dates))];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(data), sheetName);
+  });
+
+  XLSX.writeFile(wb, `weekly_attendance_${dates[0]}_to_${dates[6]}.xlsx`);
+  alert(`${selectedRegs.length} student(s) downloaded as Excel (grouped by department and year) and marked as submitted for this week.`);
 }
 function drawDeptOverview(){
   const date = document.getElementById('deptOvDate').value;
