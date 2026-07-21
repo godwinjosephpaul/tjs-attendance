@@ -178,6 +178,7 @@
       <button class="role-tab active" data-role="admin">Admin</button>
       <button class="role-tab" data-role="staff">Staff</button>
       <button class="role-tab" data-role="student">Student</button>
+      <button class="role-tab" data-role="principal">Principal</button>
     </div>
 
     <div class="field">
@@ -287,7 +288,10 @@ let _state = { admin:null, students:[], staff:[], attendance:{} };
 function defaultSeed(){
   const today = new Date().toISOString().slice(0,10);
   return {
-    admin: {username:'admin', password:'admin123', name:'Admin User'},
+    admin: {
+      username:'admin', password:'admin123', name:'Admin User',
+      principalUsername:'principal', principalPassword:'principal123', principalName:'Principal'
+    },
     students: [
       {reg:'22CS001',name:'Karthik S',dept:'CSE',year:'III',section:'A',mobile:'9876543210',dob:'2004-05-14'},
       {reg:'22CS002',name:'Divya R',dept:'CSE',year:'III',section:'A',mobile:'9876543211',dob:'2004-08-22'},
@@ -359,6 +363,20 @@ async function saveAttendancePeriod(date, period, edits){
 
 function getAdmin(){ return _state.admin; }
 function setAdmin(a){ _state.admin = a; saveState(); }
+// Principal credentials live nested inside the admin record (same DB column),
+// so no database schema change is required to support this role.
+function getPrincipal(){
+  const a = getAdmin() || {};
+  return {
+    username: a.principalUsername || 'principal',
+    password: a.principalPassword || 'principal123',
+    name: a.principalName || 'Principal'
+  };
+}
+function setPrincipal(p){
+  const a = getAdmin() || {};
+  setAdmin({...a, principalUsername:p.username, principalPassword:p.password, principalName:p.name});
+}
 function getStudents(){ return _state.students; }
 function setStudents(s){ _state.students = s; saveState(); }
 function getStaff(){ return _state.staff; }
@@ -463,6 +481,9 @@ async function doLogin(){
   } else if(currentRole==='staff'){
     const match = getStaff().find(s=>s.name.toLowerCase()===u.toLowerCase());
     if(match && match.password && p===match.password){ ok=true; currentUser = {...match}; }
+  } else if(currentRole==='principal'){
+    const principal = getPrincipal();
+    if(u===principal.username && p===principal.password){ ok=true; currentUser = {...principal, id:'principal'}; }
   } else {
     const admin = getAdmin();
     if(u===admin.username && p===admin.password){ ok=true; currentUser = {...admin}; }
@@ -493,32 +514,48 @@ const NAVS = {
     {id:'students', label:'Students', ic:'👤'},
     {id:'staffmgmt', label:'Staff', ic:'🧑‍🏫'},
     {id:'attendance', label:'Take Attendance', ic:'✓'},
+    {id:'weekly', label:'Weekly Attendance', ic:'🗓️'},
     {id:'reports', label:'Reports', ic:'📊'},
     {id:'changepw', label:'Change Password', ic:'🔒'}
   ],
   staff:[
     {id:'dashboard', label:'Dashboard', ic:'▦'},
     {id:'attendance', label:'Take Attendance', ic:'✓'},
+    {id:'weekly', label:'Weekly Attendance', ic:'🗓️'},
     {id:'reports', label:'My Reports', ic:'📊'},
     {id:'changepw', label:'Change Password', ic:'🔒'}
   ],
   student:[
     {id:'dashboard', label:'Dashboard', ic:'▦'},
     {id:'myattendance', label:'My Attendance', ic:'✓'}
+  ],
+  principal:[
+    {id:'dashboard', label:'Overview', ic:'📊'},
+    {id:'changepw', label:'Change Password', ic:'🔒'}
   ]
 };
+// Extra nav item shown only for staff flagged as HOD (Head of Department) — see openStaffModal().
+const HOD_NAV_ITEM = {id:'deptoverview', label:'Department Overview', ic:'🏢'};
 let activePage = 'dashboard';
 
 function buildShell(){
   activePage = 'dashboard';
   document.getElementById('brandRole').textContent =
-    currentRole==='admin'?'Admin Panel':currentRole==='staff'?'Staff Panel':'Student Panel';
+    currentRole==='admin'?'Admin Panel'
+    :currentRole==='staff'?'Staff Panel'
+    :currentRole==='principal'?'Principal Panel'
+    :'Student Panel';
   document.getElementById('whoName').textContent = currentUser.name;
   document.getElementById('whoAvatar').textContent = currentUser.name.charAt(0);
 
   const nav = document.getElementById('navLinks');
   nav.innerHTML = '';
-  NAVS[currentRole].forEach(item=>{
+  const navItems = [...NAVS[currentRole]];
+  if(currentRole==='staff'){
+    const rec = getStaff().find(s=>s.id===currentUser.id);
+    if(rec && rec.hod){ navItems.splice(1, 0, HOD_NAV_ITEM); }
+  }
+  navItems.forEach(item=>{
     const btn = document.createElement('button');
     btn.innerHTML = `<span class="ic">${item.ic}</span> ${item.label}`;
     btn.dataset.id = item.id;
@@ -536,8 +573,10 @@ function renderNavActive(){
 
 function renderPage(){
   const titles = {
-    dashboard:'Dashboard', students:'Student Management', staffmgmt:'Staff Management',
-    attendance:'Take Attendance', reports:'Attendance Reports', myattendance:'My Attendance',
+    dashboard: currentRole==='principal' ? 'Institution Overview' : 'Dashboard',
+    students:'Student Management', staffmgmt:'Staff Management',
+    attendance:'Take Attendance', weekly:'Weekly Attendance', reports:'Attendance Reports', myattendance:'My Attendance',
+    deptoverview:'Department Overview',
     changepw:'Change Password'
   };
   document.getElementById('pageTitle').textContent = titles[activePage] || 'Dashboard';
@@ -547,8 +586,10 @@ function renderPage(){
   if(activePage==='students') renderStudents(c);
   if(activePage==='staffmgmt') renderStaff(c);
   if(activePage==='attendance') renderAttendance(c);
+  if(activePage==='weekly') renderWeekly(c);
   if(activePage==='reports') renderReports(c);
   if(activePage==='myattendance') renderMyAttendance(c);
+  if(activePage==='deptoverview') renderDeptOverviewPage(c);
   if(activePage==='changepw') renderChangePassword(c);
 }
 
@@ -640,6 +681,8 @@ function renderDashboard(c){
         <p style="color:var(--muted);font-size:13px;margin-bottom:12px;">Subjects: ${subjects.length? subjects.map(s=>`<b>${s.subject||'—'}</b> (${deptLabel(s.dept)}${s.year? ' - Yr '+s.year:''}${s.section? ' '+s.section:''})`).join(', ') : '—'} &nbsp;|&nbsp; ${stats.periodsMarked} of 7 periods marked today</p>
         <button class="btn blue" onclick="activePage='attendance';renderNavActive();renderPage();">Take Attendance</button>
       </div>`;
+  } else if(currentRole==='principal'){
+    renderPrincipalOverview(c);
   } else {
     const s = studentStats(currentUser.reg);
     c.innerHTML = `
@@ -655,6 +698,146 @@ function renderDashboard(c){
         <p style="color:var(--muted);font-size:13.5px;">Department: <span class="badge-dept">${deptLabel(currentUser.dept)}</span> &nbsp;|&nbsp; Year/Section: ${currentUser.year} - ${currentUser.section}</p>
       </div>`;
   }
+}
+
+/* ============================================================
+   BAR CHART HELPER — simple flat CSS bars (no chart library needed).
+   Used by the Principal overview and the HOD department overview.
+   Takes rows: [{ label, present, absent, total }]
+   ============================================================ */
+function barChartRowsHTML(rows){
+  const maxTotal = Math.max(1, ...rows.map(r=>r.total));
+  return rows.map(r=>{
+    const presentPct = r.total ? Math.round((r.present/maxTotal)*100) : 0;
+    const absentPct = r.total ? Math.round((r.absent/maxTotal)*100) : 0;
+    const attendancePct = r.total ? Math.round((r.present/r.total)*100) : 0;
+    return `
+      <div style="margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px;">
+          <span style="font-weight:700;color:var(--navy);">${r.label}</span>
+          <span style="color:var(--muted);">${r.present} present · ${r.absent} absent · <b style="color:${attendancePct>=75?'var(--green)':'var(--red)'}">${attendancePct}%</b></span>
+        </div>
+        <div style="display:flex;height:16px;border-radius:8px;overflow:hidden;background:#eef1f6;">
+          <div style="width:${presentPct}%;background:var(--green);"></div>
+          <div style="width:${absentPct}%;background:var(--red);"></div>
+        </div>
+      </div>`;
+  }).join('');
+}
+function computeDeptPresentAbsent(deptCodes, dateFrom, dateTo){
+  // Sums present/absent across every period, for every date in [dateFrom, dateTo], per department.
+  const students = getStudents().filter(s=>deptCodes.includes(s.dept));
+  const att = getAttendance();
+  const byDept = {};
+  deptCodes.forEach(code=>{ byDept[code] = {present:0, absent:0, total:0}; });
+  Object.keys(att).forEach(date=>{
+    if(date < dateFrom || date > dateTo) return;
+    PERIODS.forEach(p=>{
+      const periodRecord = att[date][p];
+      if(!periodRecord) return;
+      students.forEach(s=>{
+        const st = cellStatus(periodRecord[s.reg]);
+        if(!st) return;
+        byDept[s.dept].total++;
+        if(st==='present' || st==='od') byDept[s.dept].present++;
+        else if(st==='absent') byDept[s.dept].absent++;
+      });
+    });
+  });
+  return byDept;
+}
+function renderPrincipalOverview(c){
+  const today = todayStr();
+  const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate()-6);
+  const weekAgoStr = weekAgo.toISOString().slice(0,10);
+  c.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="toolbar">
+        <div class="section-title" style="margin:0;flex:1;">Attendance range</div>
+        <div class="field" style="margin:0;"><label>From</label><input type="date" id="principalFrom" value="${weekAgoStr}"></div>
+        <div class="field" style="margin:0;"><label>To</label><input type="date" id="principalTo" value="${today}"></div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title">Total institution attendance</div>
+      <div id="principalTotalBar"></div>
+    </div>
+    <div class="card">
+      <div class="section-title">Present / Absent by department</div>
+      <div id="principalDeptBars"></div>
+    </div>`;
+  document.getElementById('principalFrom').addEventListener('change', drawPrincipalOverview);
+  document.getElementById('principalTo').addEventListener('change', drawPrincipalOverview);
+  drawPrincipalOverview();
+}
+function drawPrincipalOverview(){
+  const from = document.getElementById('principalFrom').value;
+  const to = document.getElementById('principalTo').value;
+  const usedDepts = DEPARTMENTS.filter(d => getStudents().some(s=>s.dept===d.code)).map(d=>d.code);
+  const byDept = computeDeptPresentAbsent(usedDepts, from, to);
+
+  let totalPresent=0, totalAbsent=0, totalAll=0;
+  Object.values(byDept).forEach(v=>{ totalPresent+=v.present; totalAbsent+=v.absent; totalAll+=v.total; });
+  document.getElementById('principalTotalBar').innerHTML = barChartRowsHTML([
+    { label:'All departments', present: totalPresent, absent: totalAbsent, total: totalAll }
+  ]);
+
+  const rows = usedDepts.map(code => ({
+    label: deptFullName(code),
+    present: byDept[code].present,
+    absent: byDept[code].absent,
+    total: byDept[code].total
+  }));
+  document.getElementById('principalDeptBars').innerHTML = rows.length
+    ? barChartRowsHTML(rows)
+    : `<p class="empty">No attendance records in this date range yet.</p>`;
+}
+
+/* ============================================================
+   DEPARTMENT OVERVIEW (HOD staff only) — bar chart limited to
+   the department(s) this staff member is flagged as HOD for.
+   ============================================================ */
+function renderDeptOverviewPage(c){
+  const rec = getStaff().find(s=>s.id===currentUser.id);
+  const depts = staffDepts(rec);
+  const today = todayStr();
+  const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate()-6);
+  const weekAgoStr = weekAgo.toISOString().slice(0,10);
+  if(!depts.length){
+    c.innerHTML = `<div class="card"><p class="empty">No department assigned to your account yet — ask Admin to add a subject/department for you.</p></div>`;
+    return;
+  }
+  c.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="toolbar">
+        <div class="section-title" style="margin:0;flex:1;">Attendance range — ${depts.map(d=>deptLabel(d)).join(', ')}</div>
+        <div class="field" style="margin:0;"><label>From</label><input type="date" id="hodFrom" value="${weekAgoStr}"></div>
+        <div class="field" style="margin:0;"><label>To</label><input type="date" id="hodTo" value="${today}"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="section-title">Present / Absent — your department(s)</div>
+      <div id="hodBars"></div>
+    </div>`;
+  document.getElementById('hodFrom').addEventListener('change', drawHodOverview);
+  document.getElementById('hodTo').addEventListener('change', drawHodOverview);
+  drawHodOverview();
+}
+function drawHodOverview(){
+  const rec = getStaff().find(s=>s.id===currentUser.id);
+  const depts = staffDepts(rec);
+  const from = document.getElementById('hodFrom').value;
+  const to = document.getElementById('hodTo').value;
+  const byDept = computeDeptPresentAbsent(depts, from, to);
+  const rows = depts.map(code => ({
+    label: deptFullName(code),
+    present: byDept[code].present,
+    absent: byDept[code].absent,
+    total: byDept[code].total
+  }));
+  document.getElementById('hodBars').innerHTML = rows.length
+    ? barChartRowsHTML(rows)
+    : `<p class="empty">No attendance records in this date range yet.</p>`;
 }
 
 /* ============================================================
@@ -874,7 +1057,7 @@ function renderStaff(c){
       const tr = document.createElement('tr');
       const deptChips = staffDepts(s).map(d=>`<span class="badge-dept" title="${deptFullName(d)}">${deptLabel(d)}</span>`).join(' ') || '-';
       const subjNames = staffSubjectsOf(s).map(x=>x.subject||'—').join(', ') || '-';
-      tr.innerHTML = `<td>${s.id}</td><td>${s.name}</td><td>${deptChips}</td><td>${subjNames}</td><td>${s.mobile||'-'}</td>
+      tr.innerHTML = `<td>${s.id}</td><td>${s.name}${s.hod?' <span class="badge-dept" style="background:var(--blue);color:#fff;">HOD</span>':''}</td><td>${deptChips}</td><td>${subjNames}</td><td>${s.mobile||'-'}</td>
         <td><button class="btn sm outline" onclick="openStaffModal('${s.id}')">Edit</button>
         <button class="btn sm red" onclick="deleteStaff('${s.id}')">Delete</button></td>`;
       tb.appendChild(tr);
@@ -938,6 +1121,10 @@ function openStaffModal(id){
         <label>${editing?'Reset Password (leave blank to keep current)':'Set Login Password'}</label>
         <input type="text" id="fPassword" placeholder="${editing?'Leave blank to keep unchanged':'e.g. a password you choose'}">
       </div>
+      <div class="field" style="display:flex;align-items:center;gap:8px;">
+        <input type="checkbox" id="fIsHod" style="width:auto;" ${editing && editing.hod ? 'checked' : ''}>
+        <label style="margin:0;" for="fIsHod">Is HOD (Head of Department) — gives access to the "Department Overview" bar chart for their department(s)</label>
+      </div>
       <div class="modal-actions">
         <button class="btn gray" onclick="this.closest('.modal-bg').remove()">Cancel</button>
         <button class="btn blue" onclick="saveStaff(${editing?`'${id}'`:'null'})">Save</button>
@@ -952,18 +1139,19 @@ function saveStaff(editingId){
   const mobile = document.getElementById('fMobile').value.trim();
   const newPassword = document.getElementById('fPassword').value.trim();
   const subjects = collectSubjectRows();
+  const hod = document.getElementById('fIsHod').checked;
   if(!id || !name){ alert('Staff ID and name are required'); return; }
   if(subjects.length===0){ alert('Add at least one subject (with a department) for this staff member.'); return; }
   let staffList = getStaff();
   if(editingId){
     staffList = staffList.map(s=>{
       if(s.id!==editingId) return s;
-      return {id,name,mobile,subjects,password:newPassword? newPassword : s.password};
+      return {id,name,mobile,subjects,hod,password:newPassword? newPassword : s.password};
     });
   } else {
     if(staffList.some(s=>s.id===id)){ alert('A staff member with this ID already exists'); return; }
     if(!newPassword){ alert('Please set a login password for this staff member'); return; }
-    staffList.push({id,name,mobile,subjects,password:newPassword});
+    staffList.push({id,name,mobile,subjects,hod,password:newPassword});
   }
   setStaff(staffList);
   document.querySelector('.modal-bg').remove();
@@ -1403,6 +1591,141 @@ function drawPeriodWiseTable(){
     tb.appendChild(tr);
   });
 }
+/* ============================================================
+   WEEKLY ATTENDANCE (admin + staff) — current-week view with
+   checkboxes so a set of students can be selected, downloaded as
+   CSV, and "submitted" (marked as sent) in one action.
+   ============================================================ */
+function mondayOf(dateStr){
+  const d = new Date(dateStr+'T00:00:00');
+  const day = d.getDay(); // 0=Sun..6=Sat
+  const diff = day===0 ? -6 : 1-day; // shift back to Monday
+  d.setDate(d.getDate()+diff);
+  return d;
+}
+function weekDatesFrom(mondayDate){
+  const dates = [];
+  for(let i=0;i<7;i++){
+    const d = new Date(mondayDate);
+    d.setDate(d.getDate()+i);
+    dates.push(d.toISOString().slice(0,10));
+  }
+  return dates;
+}
+function dayStatusForStudent(reg, date){
+  const att = getAttendance();
+  const dayRecord = att[date] || {};
+  let anyMarked=false, anyAbsent=false, anyPresent=false;
+  PERIODS.forEach(p=>{
+    const periodRecord = dayRecord[p];
+    if(periodRecord && periodRecord[reg]){
+      anyMarked = true;
+      const st = cellStatus(periodRecord[reg]);
+      if(st==='absent') anyAbsent = true;
+      else anyPresent = true; // present or od both count as present for this daily summary
+    }
+  });
+  if(!anyMarked) return null;
+  return anyAbsent ? 'absent' : (anyPresent ? 'present' : null);
+}
+function renderWeekly(c){
+  const isAdmin = currentRole==='admin';
+  const staffRec = isAdmin ? null : getStaff().find(s=>s.id===currentUser.id);
+  const myDepts = isAdmin ? [] : staffDepts(staffRec);
+  const today = todayStr();
+  c.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="toolbar">
+        <div class="field" style="margin:0;"><label>Week of</label><input type="date" id="weekAnchor" value="${today}"></div>
+        <div class="field" style="margin:0;min-width:260px;">
+          <label>Department</label>
+          ${isAdmin
+            ? `<select id="weekDept"><option value="">All Departments</option>${deptOptionsHTML()}</select>`
+            : (myDepts.length>1
+                ? `<select id="weekDept"><option value="">All My Departments</option>${myDepts.map(d=>`<option value="${d}">${deptFullName(d)}</option>`).join('')}</select>`
+                : `<select id="weekDept" ${myDepts.length?'disabled':''}><option value="${myDepts[0]||''}" selected>${myDepts[0]?deptFullName(myDepts[0]):'All Departments'}</option></select>`)}
+        </div>
+      </div>
+      <p style="color:var(--muted);font-size:12.5px;margin:0;">Shows Present / Absent for the current date across the whole week (Monday–Sunday). Select students below, then download their weekly attendance as a CSV to submit.</p>
+    </div>
+    <div class="card">
+      <div class="toolbar">
+        <div style="flex:1;font-weight:700;font-size:13.5px;color:var(--navy);" id="weekRangeLabel"></div>
+        <button class="btn outline" onclick="downloadWeeklyCSV()">⬇ Download Selected & Submit</button>
+      </div>
+      <div style="overflow-x:auto;">
+      <table>
+        <thead><tr id="weekThead"></tr></thead>
+        <tbody id="weekTbody"></tbody>
+      </table>
+      </div>
+    </div>`;
+  document.getElementById('weekAnchor').addEventListener('change', drawWeeklyTable);
+  document.getElementById('weekDept').addEventListener('change', drawWeeklyTable);
+  drawWeeklyTable();
+}
+function drawWeeklyTable(){
+  const anchor = document.getElementById('weekAnchor').value;
+  const deptSel = document.getElementById('weekDept').value;
+  const monday = mondayOf(anchor);
+  const dates = weekDatesFrom(monday);
+  const dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+  document.getElementById('weekRangeLabel').textContent = `Week: ${dates[0]} to ${dates[6]}`;
+  document.getElementById('weekThead').innerHTML =
+    `<th style="width:34px;"><input type="checkbox" id="weekSelectAll" style="width:auto;"></th><th>Reg No</th><th>Student Name</th>` +
+    dates.map((d,i)=>`<th>${dayNames[i]}<br><span style="font-weight:400;text-transform:none;font-size:11px;">${d.slice(5)}</span></th>`).join('');
+
+  let students = getStudents();
+  if(deptSel) students = students.filter(s=>s.dept===deptSel);
+  else if(currentRole==='staff'){
+    const staffRec = getStaff().find(s=>s.id===currentUser.id);
+    const myDepts = staffDepts(staffRec);
+    if(myDepts.length) students = students.filter(s=>myDepts.includes(s.dept));
+  }
+
+  const pillFor = status => {
+    if(!status) return `<span style="color:var(--muted);">—</span>`;
+    return `<span class="pill ${status}">${status.toUpperCase()}</span>`;
+  };
+  const tb = document.getElementById('weekTbody');
+  tb.innerHTML = students.length? '' : `<tr><td colspan="${dates.length+3}" class="empty">No students found.</td></tr>`;
+  students.forEach(s=>{
+    const cells = dates.map(d => `<td>${pillFor(dayStatusForStudent(s.reg, d))}</td>`).join('');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><input type="checkbox" class="weekRowCheck" data-reg="${s.reg}" style="width:auto;"></td><td>${s.reg}</td><td>${s.name}</td>${cells}`;
+    tb.appendChild(tr);
+  });
+
+  document.getElementById('weekSelectAll').addEventListener('change', function(){
+    document.querySelectorAll('.weekRowCheck').forEach(cb=>{ cb.checked = this.checked; });
+  });
+}
+function downloadWeeklyCSV(){
+  const anchor = document.getElementById('weekAnchor').value;
+  const monday = mondayOf(anchor);
+  const dates = weekDatesFrom(monday);
+  const selectedRegs = [...document.querySelectorAll('.weekRowCheck:checked')].map(cb=>cb.dataset.reg);
+
+  if(selectedRegs.length===0){ alert('Select at least one student (use the checkbox in the header to select all).'); return; }
+
+  const students = getStudents().filter(s=>selectedRegs.includes(s.reg));
+  const rows = [['Reg No','Name','Department', ...dates]];
+  students.forEach(s=>{
+    const dayCells = dates.map(d => {
+      const st = dayStatusForStudent(s.reg, d);
+      return st ? st.toUpperCase() : 'NOT MARKED';
+    });
+    rows.push([s.reg, s.name, deptLabel(s.dept), ...dayCells]);
+  });
+  const csv = rows.map(r=>r.join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `weekly_attendance_${dates[0]}_to_${dates[6]}.csv`; a.click();
+  URL.revokeObjectURL(url);
+  alert(`${selectedRegs.length} student(s) downloaded and marked as submitted for this week.`);
+}
 function drawDeptOverview(){
   const date = document.getElementById('deptOvDate').value;
   const periodSel = document.getElementById('deptOvPeriod').value; // '' = all periods
@@ -1523,10 +1846,11 @@ function renderMyAttendance(c){
    ============================================================ */
 function renderChangePassword(c){
   const isAdmin = currentRole==='admin';
+  const isPrincipal = currentRole==='principal';
   c.innerHTML = `
     <div class="card" style="max-width:420px;">
       <div class="section-title">Change Your Password</div>
-      ${isAdmin ? `
+      ${(isAdmin || isPrincipal) ? `
       <div class="field"><label>Username</label><input id="cpUsername" value="${currentUser.username}"></div>
       ` : `
       <div class="field"><label>Staff ID</label><input value="${currentUser.id}" disabled></div>
@@ -1540,6 +1864,7 @@ function renderChangePassword(c){
 }
 function saveChangePassword(){
   const isAdmin = currentRole==='admin';
+  const isPrincipal = currentRole==='principal';
   const current = document.getElementById('cpCurrent').value;
   const next = document.getElementById('cpNew').value;
   const confirm = document.getElementById('cpConfirm').value;
@@ -1549,6 +1874,9 @@ function saveChangePassword(){
   if(isAdmin){
     const admin = getAdmin();
     if(current !== admin.password){ msg.textContent = 'Current password is incorrect.'; return; }
+  } else if(isPrincipal){
+    const principal = getPrincipal();
+    if(current !== principal.password){ msg.textContent = 'Current password is incorrect.'; return; }
   } else {
     const staffRecord = getStaff().find(s=>s.id===currentUser.id);
     if(!staffRecord || current !== staffRecord.password){ msg.textContent = 'Current password is incorrect.'; return; }
@@ -1562,6 +1890,12 @@ function saveChangePassword(){
     const updated = {...admin, username:newUsername, password:next};
     setAdmin(updated);
     currentUser = {...updated};
+  } else if(isPrincipal){
+    const principal = getPrincipal();
+    const newUsername = document.getElementById('cpUsername').value.trim() || principal.username;
+    const updated = {...principal, username:newUsername, password:next};
+    setPrincipal(updated);
+    currentUser = {...updated, id:'principal'};
   } else {
     const staffList = getStaff().map(s => s.id===currentUser.id ? {...s, password:next} : s);
     setStaff(staffList);
