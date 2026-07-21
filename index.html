@@ -851,19 +851,63 @@ function groupedBarChart(canvasId, rows){
     }
   });
 }
+function normalizeYearKey(y){
+  // Different pages/admins have typed year as roman numerals, plain
+  // digits, or ordinal words over time — normalize them all to one
+  // canonical roman-numeral key so filters/dropdowns don't fragment.
+  if(!y) return '';
+  const s = String(y).trim().toUpperCase();
+  const map = {
+    '1':'I','I':'I','1ST':'I','1ST YEAR':'I','FIRST':'I','FIRST YEAR':'I',
+    '2':'II','II':'II','2ND':'II','2ND YEAR':'II','SECOND':'II','SECOND YEAR':'II',
+    '3':'III','III':'III','3RD':'III','3RD YEAR':'III','THIRD':'III','THIRD YEAR':'III',
+    '4':'IV','IV':'IV','4TH':'IV','4TH YEAR':'IV','FOURTH':'IV','FOURTH YEAR':'IV'
+  };
+  return map[s] || s;
+}
+function normalizeSectionKey(sec){
+  return (sec||'').trim().toUpperCase();
+}
 function yearOrdinalLabel(y){
   const map = {'I':'1st Year','II':'2nd Year','III':'3rd Year','IV':'4th Year'};
-  return map[y] || (y || 'Year —');
+  const norm = normalizeYearKey(y);
+  return map[norm] || (y || 'Year —');
+}
+function baseStudentsForDeptFilter(deptSel, myDepts){
+  let students = getStudents();
+  if(deptSel) students = students.filter(s=>s.dept===deptSel);
+  else if(currentRole==='staff' && myDepts && myDepts.length) students = students.filter(s=>myDepts.includes(s.dept));
+  return students;
+}
+function filterStudentsByYearSection(students, yearSel, sectionSel){
+  let out = students;
+  if(yearSel) out = out.filter(s=>normalizeYearKey(s.year)===yearSel);
+  if(sectionSel) out = out.filter(s=>normalizeSectionKey(s.section)===sectionSel);
+  return out;
+}
+function populateYearSelect(selectEl, students){
+  const YEAR_ORDER = {'I':1,'II':2,'III':3,'IV':4};
+  const years = [...new Set(students.map(s=>normalizeYearKey(s.year)).filter(Boolean))]
+    .sort((a,b)=>(YEAR_ORDER[a]||99)-(YEAR_ORDER[b]||99));
+  const current = selectEl.value;
+  selectEl.innerHTML = `<option value="">All Years</option>` + years.map(y=>`<option value="${y}">${yearOrdinalLabel(y)}</option>`).join('');
+  if(years.includes(current)) selectEl.value = current;
+}
+function populateSectionSelect(selectEl, students){
+  const sections = [...new Set(students.map(s=>normalizeSectionKey(s.section)).filter(Boolean))].sort();
+  const current = selectEl.value;
+  selectEl.innerHTML = `<option value="">All Sections</option>` + sections.map(sec=>`<option value="${sec}">Section ${sec}</option>`).join('');
+  if(sections.includes(current)) selectEl.value = current;
 }
 function computeYearSectionPresentAbsent(deptCodes, dateFrom, dateTo){
   // Same as computeDeptPresentAbsent, but broken down by dept + year + section.
   const students = getStudents().filter(s=>deptCodes.includes(s.dept));
   const att = getAttendance();
   const byKey = {};
-  function keyFor(s){ return s.dept+'||'+(s.year||'—')+'||'+(s.section||'—'); }
+  function keyFor(s){ return s.dept+'||'+normalizeYearKey(s.year)+'||'+normalizeSectionKey(s.section); }
   students.forEach(s=>{
     const k = keyFor(s);
-    if(!byKey[k]) byKey[k] = {dept:s.dept, year:s.year||'—', section:s.section||'—', present:0, absent:0, total:0};
+    if(!byKey[k]) byKey[k] = {dept:s.dept, year:normalizeYearKey(s.year)||'—', section:normalizeSectionKey(s.section)||'—', present:0, absent:0, total:0};
   });
   Object.keys(att).forEach(date=>{
     if(date < dateFrom || date > dateTo) return;
@@ -995,7 +1039,13 @@ function openStudentModal(reg){
       <div class="field"><label>Full Name</label><input id="mName" value="${editing?editing.name:''}"></div>
       <div class="field"><label>Department</label><select id="mDept">${deptOptionsHTML(editing?editing.dept:'CSE')}</select></div>
       <div class="field" style="display:flex;gap:10px;">
-        <div style="flex:1;"><label>Year</label><input id="mYear" value="${editing?editing.year:''}" placeholder="e.g. III"></div>
+        <div style="flex:1;"><label>Year</label><select id="mYear">
+          <option value="">Select year</option>
+          <option value="I" ${editing&&normalizeYearKey(editing.year)==='I'?'selected':''}>1st Year</option>
+          <option value="II" ${editing&&normalizeYearKey(editing.year)==='II'?'selected':''}>2nd Year</option>
+          <option value="III" ${editing&&normalizeYearKey(editing.year)==='III'?'selected':''}>3rd Year</option>
+          <option value="IV" ${editing&&normalizeYearKey(editing.year)==='IV'?'selected':''}>4th Year</option>
+        </select></div>
         <div style="flex:1;"><label>Section</label><input id="mSection" value="${editing?editing.section:''}" placeholder="e.g. A"></div>
       </div>
       <div class="field"><label>Date of Birth (used as login password)</label><input type="date" id="mDob" value="${editing?editing.dob||'':''}"></div>
@@ -1011,8 +1061,8 @@ function saveStudent(editingReg){
   const reg = document.getElementById('mReg').value.trim();
   const name = document.getElementById('mName').value.trim();
   const dept = document.getElementById('mDept').value;
-  const year = document.getElementById('mYear').value.trim();
-  const section = document.getElementById('mSection').value.trim();
+  const year = document.getElementById('mYear').value;
+  const section = document.getElementById('mSection').value.trim().toUpperCase();
   const dob = document.getElementById('mDob').value;
   const mobile = document.getElementById('mMobile').value.trim();
   if(!reg || !name){ alert('Register number and name are required'); return; }
@@ -1110,8 +1160,8 @@ function processBulkUpload(){
           reg,
           name,
           dept: (cols[idx.dept]||'').trim(),
-          year: (cols[idx.year]||'').trim(),
-          section: (cols[idx.section]||'').trim(),
+          year: normalizeYearKey((cols[idx.year]||'').trim()),
+          section: (cols[idx.section]||'').trim().toUpperCase(),
           mobile: (cols[idx.mobile]||'').trim(),
           dob: (cols[idx.dob]||'').trim()
         };
@@ -1633,6 +1683,28 @@ function renderReports(c){
     </div>` : ''}
     <div class="card" style="margin-bottom:16px;">
       <div class="toolbar">
+        <div class="section-title" style="margin:0;flex:1;">Filter students</div>
+        <div class="field" style="margin:0;min-width:260px;">
+          <label>Department</label>
+          ${isAdmin
+            ? `<select id="repDept"><option value="">All Departments</option>${deptOptionsHTML()}</select>`
+            : (_reportsMyDepts.length>1
+                ? `<select id="repDept"><option value="">All My Departments</option>${_reportsMyDepts.map(d=>`<option value="${d}">${deptFullName(d)}</option>`).join('')}</select>`
+                : `<select id="repDept" ${_reportsMyDepts.length?'disabled':''}><option value="${_reportsMyDepts[0]||''}" selected>${_reportsMyDepts[0]?deptFullName(_reportsMyDepts[0]):'All Departments'}</option></select>`)}
+        </div>
+        <div class="field" style="margin:0;min-width:150px;">
+          <label>Year</label>
+          <select id="repYear"><option value="">All Years</option></select>
+        </div>
+        <div class="field" style="margin:0;min-width:150px;">
+          <label>Section</label>
+          <select id="repSection"><option value="">All Sections</option></select>
+        </div>
+      </div>
+      <p style="color:var(--muted);font-size:12.5px;margin:0;">Pick a year to see its sections, then a section to see just those students. Applies to both tables below.</p>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+      <div class="toolbar">
         <div class="section-title" style="margin:0;flex:1;">Period-wise Attendance</div>
         <div class="field" style="margin:0;"><label>Date</label><input type="date" id="pwDate" value="${today}"></div>
       </div>
@@ -1645,14 +1717,6 @@ function renderReports(c){
     </div>
     <div class="card">
       <div class="toolbar">
-        <div class="field" style="margin:0;min-width:260px;">
-          <label>Department</label>
-          ${isAdmin
-            ? `<select id="repDept"><option value="">All Departments</option>${deptOptionsHTML()}</select>`
-            : (_reportsMyDepts.length>1
-                ? `<select id="repDept"><option value="">All My Departments</option>${_reportsMyDepts.map(d=>`<option value="${d}">${deptFullName(d)}</option>`).join('')}</select>`
-                : `<select id="repDept" ${_reportsMyDepts.length?'disabled':''}><option value="${_reportsMyDepts[0]||''}" selected>${_reportsMyDepts[0]?deptFullName(_reportsMyDepts[0]):'All Departments'}</option></select>`)}
-        </div>
         <div style="flex:1;"></div>
         <button class="btn outline" onclick="exportCSV()">⬇ Export CSV</button>
       </div>
@@ -1666,17 +1730,35 @@ function renderReports(c){
     document.getElementById('deptOvPeriod').addEventListener('change', drawDeptOverview);
     drawDeptOverview();
   }
-  document.getElementById('repDept').addEventListener('change', ()=>{ drawReportTable(); drawPeriodWiseTable(); });
+  document.getElementById('repDept').addEventListener('change', ()=>{ populateRepYearOptions(); populateRepSectionOptions(); drawReportTable(); drawPeriodWiseTable(); });
+  document.getElementById('repYear').addEventListener('change', ()=>{ populateRepSectionOptions(); drawReportTable(); drawPeriodWiseTable(); });
+  document.getElementById('repSection').addEventListener('change', ()=>{ drawReportTable(); drawPeriodWiseTable(); });
   document.getElementById('pwDate').addEventListener('change', drawPeriodWiseTable);
+  populateRepYearOptions();
+  populateRepSectionOptions();
   drawReportTable();
   drawPeriodWiseTable();
 }
+function repBaseStudents(){
+  const deptSel = document.getElementById('repDept') ? document.getElementById('repDept').value : '';
+  return baseStudentsForDeptFilter(deptSel, _reportsMyDepts);
+}
+function populateRepYearOptions(){
+  populateYearSelect(document.getElementById('repYear'), repBaseStudents());
+}
+function populateRepSectionOptions(){
+  const yearSel = document.getElementById('repYear').value;
+  const students = filterStudentsByYearSection(repBaseStudents(), yearSel, '');
+  populateSectionSelect(document.getElementById('repSection'), students);
+}
+function repFilteredStudents(){
+  const yearSel = document.getElementById('repYear') ? document.getElementById('repYear').value : '';
+  const sectionSel = document.getElementById('repSection') ? document.getElementById('repSection').value : '';
+  return filterStudentsByYearSection(repBaseStudents(), yearSel, sectionSel);
+}
 function drawPeriodWiseTable(){
   const date = document.getElementById('pwDate').value;
-  const deptSel = document.getElementById('repDept') ? document.getElementById('repDept').value : '';
-  let students = getStudents();
-  if(deptSel) students = students.filter(s=>s.dept===deptSel);
-  else if(currentRole==='staff' && _reportsMyDepts.length) students = students.filter(s=>_reportsMyDepts.includes(s.dept));
+  const students = repFilteredStudents();
   const att = getAttendance();
   const dayRecord = att[date] || {};
   const pillFor = val => {
@@ -1687,7 +1769,7 @@ function drawPeriodWiseTable(){
     return `<span class="pill ${status}"${title}>${status.toUpperCase()}${comment?' 💬':''}</span>`;
   };
   const tb = document.getElementById('pwTbody');
-  tb.innerHTML = students.length? '' : `<tr><td colspan="${PERIODS.length+1}" class="empty">No students found for this department.</td></tr>`;
+  tb.innerHTML = students.length? '' : `<tr><td colspan="${PERIODS.length+1}" class="empty">No students found for this filter.</td></tr>`;
   students.forEach(s=>{
     const cells = PERIODS.map(p => `<td>${pillFor(dayRecord[p] ? dayRecord[p][s.reg] : null)}</td>`).join('');
     const tr = document.createElement('tr');
@@ -1749,12 +1831,16 @@ function renderWeekly(c){
                 ? `<select id="weekDept"><option value="">All My Departments</option>${myDepts.map(d=>`<option value="${d}">${deptFullName(d)}</option>`).join('')}</select>`
                 : `<select id="weekDept" ${myDepts.length?'disabled':''}><option value="${myDepts[0]||''}" selected>${myDepts[0]?deptFullName(myDepts[0]):'All Departments'}</option></select>`)}
         </div>
-        <div class="field" style="margin:0;min-width:160px;">
+        <div class="field" style="margin:0;min-width:150px;">
           <label>Year</label>
           <select id="weekYear"><option value="">All Years</option></select>
         </div>
+        <div class="field" style="margin:0;min-width:150px;">
+          <label>Section</label>
+          <select id="weekSection"><option value="">All Sections</option></select>
+        </div>
       </div>
-      <p style="color:var(--muted);font-size:12.5px;margin:0;">Shows Present / Absent for the current date across the whole week (Monday–Sunday). Select students below, then download their weekly attendance as a CSV or Excel file to submit.</p>
+      <p style="color:var(--muted);font-size:12.5px;margin:0;">Shows Present / Absent for the current date across the whole week (Monday–Sunday). Pick a year to see its sections, then a section to see just those students. Select students below, then download their weekly attendance as a CSV or Excel file to submit.</p>
     </div>
     <div class="card">
       <div class="toolbar">
@@ -1770,31 +1856,29 @@ function renderWeekly(c){
       </div>
     </div>`;
   document.getElementById('weekAnchor').addEventListener('change', drawWeeklyTable);
-  document.getElementById('weekDept').addEventListener('change', ()=>{ populateWeekYearOptions(); drawWeeklyTable(); });
-  document.getElementById('weekYear').addEventListener('change', drawWeeklyTable);
+  document.getElementById('weekDept').addEventListener('change', ()=>{ populateWeekYearOptions(); populateWeekSectionOptions(); drawWeeklyTable(); });
+  document.getElementById('weekYear').addEventListener('change', ()=>{ populateWeekSectionOptions(); drawWeeklyTable(); });
+  document.getElementById('weekSection').addEventListener('change', drawWeeklyTable);
   populateWeekYearOptions();
+  populateWeekSectionOptions();
   drawWeeklyTable();
 }
-function populateWeekYearOptions(){
+function weekBaseStudents(){
   const deptSel = document.getElementById('weekDept').value;
-  let students = getStudents();
-  if(deptSel) students = students.filter(s=>s.dept===deptSel);
-  else if(currentRole==='staff'){
-    const staffRec = getStaff().find(s=>s.id===currentUser.id);
-    const myDepts = staffDepts(staffRec);
-    if(myDepts.length) students = students.filter(s=>myDepts.includes(s.dept));
-  }
-  const YEAR_ORDER = {'I':1,'II':2,'III':3,'IV':4};
-  const years = [...new Set(students.map(s=>s.year).filter(Boolean))]
-    .sort((a,b)=>(YEAR_ORDER[a]||99)-(YEAR_ORDER[b]||99) || a.localeCompare(b));
-  const sel = document.getElementById('weekYear');
-  const current = sel.value;
-  sel.innerHTML = `<option value="">All Years</option>` + years.map(y=>`<option value="${y}">${yearOrdinalLabel(y)}</option>`).join('');
-  if(years.includes(current)) sel.value = current;
+  const staffRec = currentRole==='staff' ? getStaff().find(s=>s.id===currentUser.id) : null;
+  const myDepts = staffRec ? staffDepts(staffRec) : [];
+  return baseStudentsForDeptFilter(deptSel, myDepts);
+}
+function populateWeekYearOptions(){
+  populateYearSelect(document.getElementById('weekYear'), weekBaseStudents());
+}
+function populateWeekSectionOptions(){
+  const yearSel = document.getElementById('weekYear').value;
+  const students = filterStudentsByYearSection(weekBaseStudents(), yearSel, '');
+  populateSectionSelect(document.getElementById('weekSection'), students);
 }
 function drawWeeklyTable(){
   const anchor = document.getElementById('weekAnchor').value;
-  const deptSel = document.getElementById('weekDept').value;
   const monday = mondayOf(anchor);
   const dates = weekDatesFrom(monday);
   const dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -1804,15 +1888,9 @@ function drawWeeklyTable(){
     `<th style="width:34px;"><input type="checkbox" id="weekSelectAll" style="width:auto;"></th><th>Reg No</th><th>Student Name</th>` +
     dates.map((d,i)=>`<th>${dayNames[i]}<br><span style="font-weight:400;text-transform:none;font-size:11px;">${d.slice(5)}</span></th>`).join('');
 
-  let students = getStudents();
-  if(deptSel) students = students.filter(s=>s.dept===deptSel);
-  else if(currentRole==='staff'){
-    const staffRec = getStaff().find(s=>s.id===currentUser.id);
-    const myDepts = staffDepts(staffRec);
-    if(myDepts.length) students = students.filter(s=>myDepts.includes(s.dept));
-  }
   const yearSel = document.getElementById('weekYear').value;
-  if(yearSel) students = students.filter(s=>s.year===yearSel);
+  const sectionSel = document.getElementById('weekSection').value;
+  const students = filterStudentsByYearSection(weekBaseStudents(), yearSel, sectionSel);
 
   const pillFor = status => {
     if(!status) return `<span style="color:var(--muted);">—</span>`;
@@ -1934,10 +2012,7 @@ function drawDeptOverview(){
   }
 }
 function drawReportTable(){
-  const deptSel = document.getElementById('repDept').value;
-  let students = getStudents();
-  if(deptSel) students = students.filter(s=>s.dept===deptSel);
-  else if(currentRole==='staff' && _reportsMyDepts.length) students = students.filter(s=>_reportsMyDepts.includes(s.dept));
+  const students = repFilteredStudents();
   const tb = document.getElementById('repTbody');
   tb.innerHTML = students.length? '' : `<tr><td colspan="6" class="empty">No records yet</td></tr>`;
   students.forEach(s=>{
@@ -1949,13 +2024,11 @@ function drawReportTable(){
   });
 }
 function exportCSV(){
-  const deptSel = document.getElementById('repDept') ? document.getElementById('repDept').value : '';
-  let students = getStudents();
-  if(deptSel) students = students.filter(s=>s.dept===deptSel);
-  let rows = [['Reg No','Name','Department','Present','Absent','OD','Percentage']];
+  const students = repFilteredStudents();
+  let rows = [['Reg No','Name','Department','Year','Section','Present','Absent','OD','Percentage']];
   students.forEach(s=>{
     const st = studentStats(s.reg);
-    rows.push([s.reg, s.name, deptLabel(s.dept), st.present, st.absent, st.od, st.pct+'%']);
+    rows.push([s.reg, s.name, deptLabel(s.dept), yearOrdinalLabel(s.year), s.section||'', st.present, st.absent, st.od, st.pct+'%']);
   });
   const csv = rows.map(r=>r.join(',')).join('\n');
   const blob = new Blob([csv], {type:'text/csv'});
