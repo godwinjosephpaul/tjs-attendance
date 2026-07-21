@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TJS Engineering College — Attendance System</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <style>
   :root{
     --navy:#152B4E;
@@ -768,7 +769,7 @@ function renderPrincipalOverview(c){
     </div>
     <div class="card">
       <div class="section-title">Present / Absent by Year &amp; Section</div>
-      <div id="principalYearSectionBars"></div>
+      <div style="position:relative;height:360px;"><canvas id="principalYearSectionChart"></canvas></div>
     </div>`;
   document.getElementById('principalFrom').addEventListener('change', drawPrincipalOverview);
   document.getElementById('principalTo').addEventListener('change', drawPrincipalOverview);
@@ -798,20 +799,57 @@ function drawPrincipalOverview(){
 
   const yearSectionData = computeYearSectionPresentAbsent(usedDepts, from, to);
   const ysRows = yearSectionData.map(r => ({
-    label: deptLabel(r.dept) + ' — ' + yearOrdinalLabel(r.year) + ' — Section ' + r.section,
+    label: deptLabel(r.dept) + ' — ' + yearOrdinalLabel(r.year) + ' — Sec ' + r.section,
     present: r.present,
-    absent: r.absent,
-    total: r.total
+    absent: r.absent
   }));
-  document.getElementById('principalYearSectionBars').innerHTML = ysRows.length
-    ? barChartRowsHTML(ysRows)
-    : `<p class="empty">No attendance records in this date range yet.</p>`;
+  groupedBarChart('principalYearSectionChart', ysRows);
 }
 
 /* ============================================================
    DEPARTMENT OVERVIEW (HOD staff only) — bar chart limited to
    the department(s) this staff member is flagged as HOD for.
    ============================================================ */
+/* ============================================================
+   GROUPED BAR CHART HELPER (Chart.js) — vertical present vs
+   absent bars, side by side, one group per row label.
+   Used for the Year & Section breakdown on HOD / Principal pages.
+   rows: [{ label, present, absent }]
+   Keeps one Chart instance per canvas id so redraws (date filter
+   changes) destroy the old chart instead of stacking new ones.
+   ============================================================ */
+const _groupedChartInstances = {};
+function groupedBarChart(canvasId, rows){
+  const canvas = document.getElementById(canvasId);
+  if(!canvas) return;
+  if(_groupedChartInstances[canvasId]){
+    _groupedChartInstances[canvasId].destroy();
+    delete _groupedChartInstances[canvasId];
+  }
+  if(!rows.length) return;
+  _groupedChartInstances[canvasId] = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels: rows.map(r=>r.label),
+      datasets: [
+        { label:'Present', data: rows.map(r=>r.present), backgroundColor:'#1C9A5B', borderRadius:4, maxBarThickness:26 },
+        { label:'Absent', data: rows.map(r=>r.absent), backgroundColor:'#D8434A', borderRadius:4, maxBarThickness:26 }
+      ]
+    },
+    options: {
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{
+        legend:{ position:'top', labels:{ boxWidth:12, font:{ size:12 } } },
+        tooltip:{ mode:'index', intersect:false }
+      },
+      scales:{
+        x:{ ticks:{ font:{ size:11 } }, grid:{ display:false } },
+        y:{ beginAtZero:true, ticks:{ precision:0 }, grid:{ color:'#E4E8F0' } }
+      }
+    }
+  });
+}
 function yearOrdinalLabel(y){
   const map = {'I':'1st Year','II':'2nd Year','III':'3rd Year','IV':'4th Year'};
   return map[y] || (y || 'Year —');
@@ -873,7 +911,7 @@ function renderDeptOverviewPage(c){
     </div>
     <div class="card">
       <div class="section-title">Present / Absent — by Year &amp; Section</div>
-      <div id="hodYearSectionBars"></div>
+      <div style="position:relative;height:320px;"><canvas id="hodYearSectionChart"></canvas></div>
     </div>`;
   document.getElementById('hodFrom').addEventListener('change', drawHodOverview);
   document.getElementById('hodTo').addEventListener('change', drawHodOverview);
@@ -898,14 +936,11 @@ function drawHodOverview(){
   const yearSectionData = computeYearSectionPresentAbsent(depts, from, to);
   const multiDept = depts.length > 1;
   const ysRows = yearSectionData.map(r => ({
-    label: (multiDept ? deptLabel(r.dept)+' — ' : '') + yearOrdinalLabel(r.year) + ' — Section ' + r.section,
+    label: (multiDept ? deptLabel(r.dept)+' — ' : '') + yearOrdinalLabel(r.year) + ' — Sec ' + r.section,
     present: r.present,
-    absent: r.absent,
-    total: r.total
+    absent: r.absent
   }));
-  document.getElementById('hodYearSectionBars').innerHTML = ysRows.length
-    ? barChartRowsHTML(ysRows)
-    : `<p class="empty">No attendance records in this date range yet.</p>`;
+  groupedBarChart('hodYearSectionChart', ysRows);
 }
 
 /* ============================================================
