@@ -762,9 +762,13 @@ function renderPrincipalOverview(c){
       <div class="section-title">Total institution attendance</div>
       <div id="principalTotalBar"></div>
     </div>
-    <div class="card">
+    <div class="card" style="margin-bottom:16px;">
       <div class="section-title">Present / Absent by department</div>
       <div id="principalDeptBars"></div>
+    </div>
+    <div class="card">
+      <div class="section-title">Present / Absent by Year &amp; Section</div>
+      <div id="principalYearSectionBars"></div>
     </div>`;
   document.getElementById('principalFrom').addEventListener('change', drawPrincipalOverview);
   document.getElementById('principalTo').addEventListener('change', drawPrincipalOverview);
@@ -791,12 +795,60 @@ function drawPrincipalOverview(){
   document.getElementById('principalDeptBars').innerHTML = rows.length
     ? barChartRowsHTML(rows)
     : `<p class="empty">No attendance records in this date range yet.</p>`;
+
+  const yearSectionData = computeYearSectionPresentAbsent(usedDepts, from, to);
+  const ysRows = yearSectionData.map(r => ({
+    label: deptLabel(r.dept) + ' — ' + yearOrdinalLabel(r.year) + ' — Section ' + r.section,
+    present: r.present,
+    absent: r.absent,
+    total: r.total
+  }));
+  document.getElementById('principalYearSectionBars').innerHTML = ysRows.length
+    ? barChartRowsHTML(ysRows)
+    : `<p class="empty">No attendance records in this date range yet.</p>`;
 }
 
 /* ============================================================
    DEPARTMENT OVERVIEW (HOD staff only) — bar chart limited to
    the department(s) this staff member is flagged as HOD for.
    ============================================================ */
+function yearOrdinalLabel(y){
+  const map = {'I':'1st Year','II':'2nd Year','III':'3rd Year','IV':'4th Year'};
+  return map[y] || (y || 'Year —');
+}
+function computeYearSectionPresentAbsent(deptCodes, dateFrom, dateTo){
+  // Same as computeDeptPresentAbsent, but broken down by dept + year + section.
+  const students = getStudents().filter(s=>deptCodes.includes(s.dept));
+  const att = getAttendance();
+  const byKey = {};
+  function keyFor(s){ return s.dept+'||'+(s.year||'—')+'||'+(s.section||'—'); }
+  students.forEach(s=>{
+    const k = keyFor(s);
+    if(!byKey[k]) byKey[k] = {dept:s.dept, year:s.year||'—', section:s.section||'—', present:0, absent:0, total:0};
+  });
+  Object.keys(att).forEach(date=>{
+    if(date < dateFrom || date > dateTo) return;
+    PERIODS.forEach(p=>{
+      const periodRecord = att[date][p];
+      if(!periodRecord) return;
+      students.forEach(s=>{
+        const st = cellStatus(periodRecord[s.reg]);
+        if(!st) return;
+        const k = keyFor(s);
+        byKey[k].total++;
+        if(st==='present' || st==='od') byKey[k].present++;
+        else if(st==='absent') byKey[k].absent++;
+      });
+    });
+  });
+  const YEAR_ORDER = {'I':1,'II':2,'III':3,'IV':4};
+  return Object.values(byKey).sort((a,b)=>{
+    if(a.dept !== b.dept) return a.dept.localeCompare(b.dept);
+    const ay = YEAR_ORDER[a.year]||99, by = YEAR_ORDER[b.year]||99;
+    if(ay!==by) return ay-by;
+    return (a.section||'').localeCompare(b.section||'');
+  });
+}
 function renderDeptOverviewPage(c){
   const rec = getStaff().find(s=>s.id===currentUser.id);
   const depts = staffDepts(rec);
@@ -815,9 +867,13 @@ function renderDeptOverviewPage(c){
         <div class="field" style="margin:0;"><label>To</label><input type="date" id="hodTo" value="${today}"></div>
       </div>
     </div>
-    <div class="card">
+    <div class="card" style="margin-bottom:16px;">
       <div class="section-title">Present / Absent — your department(s)</div>
       <div id="hodBars"></div>
+    </div>
+    <div class="card">
+      <div class="section-title">Present / Absent — by Year &amp; Section</div>
+      <div id="hodYearSectionBars"></div>
     </div>`;
   document.getElementById('hodFrom').addEventListener('change', drawHodOverview);
   document.getElementById('hodTo').addEventListener('change', drawHodOverview);
@@ -837,6 +893,18 @@ function drawHodOverview(){
   }));
   document.getElementById('hodBars').innerHTML = rows.length
     ? barChartRowsHTML(rows)
+    : `<p class="empty">No attendance records in this date range yet.</p>`;
+
+  const yearSectionData = computeYearSectionPresentAbsent(depts, from, to);
+  const multiDept = depts.length > 1;
+  const ysRows = yearSectionData.map(r => ({
+    label: (multiDept ? deptLabel(r.dept)+' — ' : '') + yearOrdinalLabel(r.year) + ' — Section ' + r.section,
+    present: r.present,
+    absent: r.absent,
+    total: r.total
+  }));
+  document.getElementById('hodYearSectionBars').innerHTML = ysRows.length
+    ? barChartRowsHTML(ysRows)
     : `<p class="empty">No attendance records in this date range yet.</p>`;
 }
 
